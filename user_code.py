@@ -24,7 +24,7 @@ BUTTON_PIN = 16
 LED_PIN = 17
 
 # main.py가 요구하는 인터페이스 값들 (게임에서는 대부분 미사용/의미 재활용)
-DISPLAY_UPDATE_INTERVAL_MS = 300   # 대시보드 갱신 주기 (게임 판정 자체는 타이머/인터럽트라 이 값과 무관하게 정확함)
+DISPLAY_UPDATE_INTERVAL_MS = 1000  # 대시보드 갱신 주기 (게임 판정 자체는 타이머/인터럽트라 이 값과 무관하게 정확함)
 CLOUD_SYNC_INTERVAL_MS = 60000
 alert_threshold = 0                # 미사용
 is_muted = True                    # 버저가 없으므로 항상 음소거

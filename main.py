@@ -474,7 +474,6 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
         <div class="value"><span id="dustVal">{dust_val:.0f}</span> <span class="unit">ms</span></div>
         <div class="sub-info">
             • <span class="live-dot"></span>실시간 로컬 연결: <b>정상</b><br>
-            • 센서 출력 전압: <b id="voltVal">{volt_val:.2f} V</b><br>
             • ☁️ 구글 시트 동기화: <b id="cloudVal">{cloud_msg}</b><br>
             • 🔔 버저 제어 상태: <b id="controlVal">Mute: {is_muted_val} / 기준: {thresh_val:.0f}µg</b><br>
             • 🛰️ OTA 마지막 확인: <b id="otaVal">{ota_status}</b><br>
@@ -510,7 +509,6 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
                 if(res.ok) {{
                     const d = await res.json();
                     document.getElementById('dustVal').innerText = d.density.toFixed(0);
-                    document.getElementById('voltVal').innerText = d.voltage.toFixed(2) + ' V';
                     document.getElementById('cloudVal').innerText = d.cloud;
                     document.getElementById('controlVal').innerText = 'Mute: ' + d.mute + ' / 기준: ' + d.thresh + 'µg';
                     document.getElementById('otaVal').innerText = d.ota;
