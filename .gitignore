@@ -1,3 +1,4 @@
-src/wifi_config.py
+wifi_config.json
+user_code_tmp.py
 __pycache__/
 *.pyc
