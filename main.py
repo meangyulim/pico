@@ -31,6 +31,31 @@ except ImportError:
     _THREADING_AVAILABLE = False
 
 # -----------------------------------------------------------------
+# 원격 콘솔용 로그 버퍼 — USB로 Thonny에 물려있지 않아도(Wi-Fi로만 붙어있어도)
+# print() 출력을 /logs 웹페이지에서 볼 수 있도록, builtins.print를 감싸서
+# 시리얼 출력은 그대로 두고 최근 N줄을 메모리에도 저장합니다.
+# 이 시점 이후의 print() 호출만 잡히므로, boot.py가 이 훅이 설치되기 전에
+# 찍는 아주 초기 로그(백업 복원 등)는 여기 안 남습니다.
+# -----------------------------------------------------------------
+import builtins
+
+LOG_BUFFER_MAX_LINES = 200
+_log_buffer = []
+_real_print = builtins.print
+
+def _tee_print(*args, **kwargs):
+    _real_print(*args, **kwargs)
+    try:
+        line = " ".join(str(a) for a in args)
+        _log_buffer.append(line)
+        if len(_log_buffer) > LOG_BUFFER_MAX_LINES:
+            del _log_buffer[0]
+    except Exception:
+        pass
+
+builtins.print = _tee_print
+
+# -----------------------------------------------------------------
 # [1] 시스템 설정 및 기본 상수
 # -----------------------------------------------------------------
 CONFIG_FILE = "wifi_config.json"
@@ -394,7 +419,7 @@ def trigger_cloud_sync(user_mod, density, voltage, status_eng):
 # -----------------------------------------------------------------
 # [6] HTML 생성 함수 (대시보드 UI & 웹 에디터 UI)
 # -----------------------------------------------------------------
-def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, volt_val, status_eng, status_kor, color_hex, cloud_msg, is_muted_val, thresh_val):
+def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, volt_val, status_eng, status_kor, color_hex, cloud_msg, is_muted_val, thresh_val, ota_status):
     is_offline = (mode == "OFFLINE_AP")
     mode_badge_text = "📡 오프라인 단독 AP 모드" if is_offline else "🌐 온라인 구글 시트 연동 모드"
     mode_badge_color = "#38bdf8" if is_offline else "#10b981"
@@ -452,6 +477,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
             • 센서 출력 전압: <b id="voltVal">{volt_val:.2f} V</b><br>
             • ☁️ 구글 시트 동기화: <b id="cloudVal">{cloud_msg}</b><br>
             • 🔔 버저 제어 상태: <b id="controlVal">Mute: {is_muted_val} / 기준: {thresh_val:.0f}µg</b><br>
+            • 🛰️ OTA 마지막 확인: <b id="otaVal">{ota_status}</b><br>
             • 기기 IP 주소: <b>{current_ip}</b>
         </div>
     </div>
@@ -472,8 +498,9 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
         </form>
     </details>
 
-    <div style="margin-top: 14px; max-width: 380px; margin-left: auto; margin-right: auto;">
+    <div style="margin-top: 14px; max-width: 380px; margin-left: auto; margin-right: auto; display: flex; flex-direction: column; gap: 10px;">
         <a href="/edit" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📝 user_code.py 웹 에디터 열기</a>
+        <a href="/logs" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📜 실시간 로그 보기</a>
     </div>
 
     <script>
@@ -486,6 +513,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
                     document.getElementById('voltVal').innerText = d.voltage.toFixed(2) + ' V';
                     document.getElementById('cloudVal').innerText = d.cloud;
                     document.getElementById('controlVal').innerText = 'Mute: ' + d.mute + ' / 기준: ' + d.thresh + 'µg';
+                    document.getElementById('otaVal').innerText = d.ota;
                     const badge = document.getElementById('statusBadge');
                     badge.innerText = d.kor + ' (' + d.eng + ')';
                     badge.style.background = d.color;
@@ -494,6 +522,52 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
         }}
         setInterval(updateData, 2000);
         updateData();
+    </script>
+</body>
+</html>"""
+    return html
+
+
+def generate_logs_html():
+    html = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pico 원격 콘솔</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 12px; -webkit-text-size-adjust: 100%; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        h3 { font-size: 15px; color: #38bdf8; }
+        .back-btn { color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }
+        .note { font-size: 11px; color: #94a3b8; margin-bottom: 8px; }
+        #logBox { width: 100%; height: 75vh; background: #000; color: #4ade80; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5; border: 1px solid #334155; border-radius: 10px; padding: 10px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h3>📜 원격 콘솔 (최근 200줄)</h3>
+        <a href="/" class="back-btn">⬅ 메인으로</a>
+    </div>
+    <div class="note">Wi-Fi로만 연결돼 있어도 Thonny 시리얼 콘솔과 비슷하게 print() 출력을 볼 수 있습니다. 2초마다 자동 갱신됩니다.</div>
+    <div id="logBox">불러오는 중...</div>
+
+    <script>
+        const box = document.getElementById('logBox');
+        async function refreshLogs() {
+            try {
+                const res = await fetch('/logs.txt?t=' + Date.now());
+                if (res.ok) {
+                    const text = await res.text();
+                    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+                    box.textContent = text;
+                    if (atBottom) box.scrollTop = box.scrollHeight;
+                }
+            } catch (e) {}
+        }
+        setInterval(refreshLogs, 2000);
+        refreshLogs();
     </script>
 </body>
 </html>"""
@@ -827,9 +901,25 @@ OTA_CHECK_INTERVAL_MS = 47 * 1000  # manifest 확인 주기. 클라우드 동기
 OTA_MAX_FILE_SIZE = 128 * 1024
 OTA_ALLOWED_TARGETS = {"boot.py", "main.py", "netutil.py", "user_code.py", "user_code.default.py"}
 
+# 웹 대시보드에 "OTA 마지막 확인" 상태를 보여주기 위한 값. 콘솔(Thonny)을
+# 안 보고 있어도 브라우저로 확인할 수 있게 함.
+_ota_last_check_ms = None
+_ota_last_result = "확인 전"
+
+def get_ota_status_text():
+    if _ota_last_check_ms is None:
+        return "확인 전"
+    ago_sec = utime.ticks_diff(utime.ticks_ms(), _ota_last_check_ms) // 1000
+    if ago_sec < 60:
+        ago_str = f"{ago_sec}초 전"
+    else:
+        ago_str = f"{ago_sec // 60}분 전"
+    return f"{ago_str} - {_ota_last_result}"
+
 def _run_ota_check():
-    global _bg_busy
+    global _bg_busy, _ota_last_check_ms, _ota_last_result
     changed_any = False
+    applied_names = []
     try:
         res = urequests.get(OTA_MANIFEST_URL)
         try:
@@ -868,10 +958,15 @@ def _run_ota_check():
             with open(name, "wb") as f:
                 f.write(content)
             changed_any = True
+            applied_names.append(name)
             print(f"⬇️ [OTA] {name} 업데이트 적용")
+
+        _ota_last_result = f"적용됨: {', '.join(applied_names)}" if applied_names else "변경 없음"
     except Exception as e:
         log_error("OTA 확인", e)
+        _ota_last_result = f"오류: {type(e).__name__}"
     finally:
+        _ota_last_check_ms = utime.ticks_ms()
         if _bg_lock:
             _bg_lock.acquire()
         _bg_busy = False
@@ -1001,10 +1096,28 @@ def handle_client(conn, state):
             "cloud": cloud_st,
             "mute": is_mut,
             "thresh": th_val,
-            "user_err": state.user_err
+            "user_err": state.user_err,
+            "ota": get_ota_status_text()
         })
         resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + data_json
         conn.sendall(resp.encode('utf-8'))
+
+    # 1b) 원격 콘솔 로그 (텍스트, /logs 페이지가 주기적으로 가져감)
+    elif "GET /logs.txt" in first_line:
+        body = "\n".join(_log_buffer)
+        body_bytes = body.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: {len(body_bytes)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8'))
+        conn.sendall(body_bytes)
+
+    # 1c) 원격 콘솔 화면 (/logs) — Thonny 없이 Wi-Fi로만 붙어있어도 print() 로그를 봄
+    elif "GET /logs" in first_line:
+        logs_html = generate_logs_html()
+        resp_bytes = logs_html.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8'))
+        conn.sendall(resp_bytes)
+        gc.collect()
 
     # 2) 파비콘 즉시 종결
     elif "GET /favicon.ico" in first_line:
@@ -1145,7 +1258,7 @@ def handle_client(conn, state):
         html_str = generate_main_html(
             state.mode, state.current_ip, state.wifi_list, state.user_err,
             state.avg_density, state.avg_v, state.status_eng, state.status_kor, state.color_hex,
-            cloud_st, is_mut, th_val
+            cloud_st, is_mut, th_val, get_ota_status_text()
         )
         html_bytes = html_str.encode('utf-8')
         header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " + str(len(html_bytes)) + "\r\n\r\n"
