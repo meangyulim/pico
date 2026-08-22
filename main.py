@@ -65,21 +65,14 @@ def log_error(context, exc):
     print(f"⚠️ [{context}] {type(exc).__name__}: {exc}")
 
 
-# main.py 자체가 무한루프 등 예외 없는 버그로 멈추는 경우까지 잡기 위한 하드웨어
-# 워치독. RP2040/RP2350에서 한번 켜면 리셋 전까지 끌 수 없으므로, 처음 feed할 때
-# 지연 초기화하고 이후 계속 feed합니다. 못 먹으면 보드가 재부팅되어 boot.py가
-# main.py.bak으로 복구할 기회를 다시 얻습니다.
-_wdt = None
-
+# 예전에는 여기서 machine.WDT(하드웨어 워치독)로 "예외 없는 무한루프"까지 잡으려
+# 했지만, RP2040/RP2350의 WDT는 한번 켜면 재부팅 전까지 끌 수 없어서 Thonny에서
+# 스크립트를 정지(REPL로 전환)하면 feed가 끊겨 계속 강제 재부팅되는 문제가 있었습니다
+# (개발용 시리얼 연결이 계속 끊김). 그래서 제거했습니다 — main.py가 예외로 실패하는
+# 경우(대부분의 버그)는 boot.py가 여전히 자동 복구하고, 예외 없는 무한루프는 이제
+# 자동 복구 대상이 아닙니다 (README 참고).
 def feed_watchdog():
-    global _wdt
-    try:
-        if _wdt is None:
-            _wdt = machine.WDT(timeout=8300)
-        else:
-            _wdt.feed()
-    except Exception as e:
-        log_error("Watchdog", e)
+    pass
 
 
 def validate_user_module(user_mod):
@@ -1192,9 +1185,7 @@ def serve_until_reconnect_needed(lcd, state):
             try:
                 conn, addr = server_socket.accept()
                 # main.py를 웹 에디터로 열면 파일 전체(수십 KB)를 보내야 해서
-                # 느린 Wi-Fi에서는 1초로는 부족할 수 있음. 8.3초 워치독 타임아웃보다
-                # 여유 있게 짧게 잡아서, 느린 클라이언트가 있어도 다음 루프의
-                # feed_watchdog() 전에 항상 끝나도록 함.
+                # 느린 Wi-Fi에서는 1초로는 부족할 수 있어 여유 있게 늘림.
                 conn.settimeout(5.0)
                 wifi_saved = handle_client(conn, state)
                 conn.close()
