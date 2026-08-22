@@ -394,7 +394,7 @@ def trigger_cloud_sync(user_mod, density, voltage, status_eng):
 # -----------------------------------------------------------------
 # [6] HTML 생성 함수 (대시보드 UI & 웹 에디터 UI)
 # -----------------------------------------------------------------
-def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, volt_val, status_eng, status_kor, color_hex, cloud_msg, is_muted_val, thresh_val):
+def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, volt_val, status_eng, status_kor, color_hex, cloud_msg, is_muted_val, thresh_val, ota_status):
     is_offline = (mode == "OFFLINE_AP")
     mode_badge_text = "📡 오프라인 단독 AP 모드" if is_offline else "🌐 온라인 구글 시트 연동 모드"
     mode_badge_color = "#38bdf8" if is_offline else "#10b981"
@@ -452,6 +452,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
             • 센서 출력 전압: <b id="voltVal">{volt_val:.2f} V</b><br>
             • ☁️ 구글 시트 동기화: <b id="cloudVal">{cloud_msg}</b><br>
             • 🔔 버저 제어 상태: <b id="controlVal">Mute: {is_muted_val} / 기준: {thresh_val:.0f}µg</b><br>
+            • 🛰️ OTA 마지막 확인: <b id="otaVal">{ota_status}</b><br>
             • 기기 IP 주소: <b>{current_ip}</b>
         </div>
     </div>
@@ -486,6 +487,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
                     document.getElementById('voltVal').innerText = d.voltage.toFixed(2) + ' V';
                     document.getElementById('cloudVal').innerText = d.cloud;
                     document.getElementById('controlVal').innerText = 'Mute: ' + d.mute + ' / 기준: ' + d.thresh + 'µg';
+                    document.getElementById('otaVal').innerText = d.ota;
                     const badge = document.getElementById('statusBadge');
                     badge.innerText = d.kor + ' (' + d.eng + ')';
                     badge.style.background = d.color;
@@ -827,9 +829,25 @@ OTA_CHECK_INTERVAL_MS = 47 * 1000  # manifest 확인 주기. 클라우드 동기
 OTA_MAX_FILE_SIZE = 128 * 1024
 OTA_ALLOWED_TARGETS = {"boot.py", "main.py", "netutil.py", "user_code.py", "user_code.default.py"}
 
+# 웹 대시보드에 "OTA 마지막 확인" 상태를 보여주기 위한 값. 콘솔(Thonny)을
+# 안 보고 있어도 브라우저로 확인할 수 있게 함.
+_ota_last_check_ms = None
+_ota_last_result = "확인 전"
+
+def get_ota_status_text():
+    if _ota_last_check_ms is None:
+        return "확인 전"
+    ago_sec = utime.ticks_diff(utime.ticks_ms(), _ota_last_check_ms) // 1000
+    if ago_sec < 60:
+        ago_str = f"{ago_sec}초 전"
+    else:
+        ago_str = f"{ago_sec // 60}분 전"
+    return f"{ago_str} - {_ota_last_result}"
+
 def _run_ota_check():
-    global _bg_busy
+    global _bg_busy, _ota_last_check_ms, _ota_last_result
     changed_any = False
+    applied_names = []
     try:
         res = urequests.get(OTA_MANIFEST_URL)
         try:
@@ -868,10 +886,15 @@ def _run_ota_check():
             with open(name, "wb") as f:
                 f.write(content)
             changed_any = True
+            applied_names.append(name)
             print(f"⬇️ [OTA] {name} 업데이트 적용")
+
+        _ota_last_result = f"적용됨: {', '.join(applied_names)}" if applied_names else "변경 없음"
     except Exception as e:
         log_error("OTA 확인", e)
+        _ota_last_result = f"오류: {type(e).__name__}"
     finally:
+        _ota_last_check_ms = utime.ticks_ms()
         if _bg_lock:
             _bg_lock.acquire()
         _bg_busy = False
@@ -1001,7 +1024,8 @@ def handle_client(conn, state):
             "cloud": cloud_st,
             "mute": is_mut,
             "thresh": th_val,
-            "user_err": state.user_err
+            "user_err": state.user_err,
+            "ota": get_ota_status_text()
         })
         resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + data_json
         conn.sendall(resp.encode('utf-8'))
@@ -1145,7 +1169,7 @@ def handle_client(conn, state):
         html_str = generate_main_html(
             state.mode, state.current_ip, state.wifi_list, state.user_err,
             state.avg_density, state.avg_v, state.status_eng, state.status_kor, state.color_hex,
-            cloud_st, is_mut, th_val
+            cloud_st, is_mut, th_val, get_ota_status_text()
         )
         html_bytes = html_str.encode('utf-8')
         header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " + str(len(html_bytes)) + "\r\n\r\n"
