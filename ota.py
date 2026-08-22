@@ -32,7 +32,7 @@ OTA_ALLOWED_TARGETS = {
     "boot.py", "main.py",
     "console_log.py", "bg_thread.py", "lcd_driver.py", "wifi_manager.py",
     "web_ui.py", "file_editor.py", "ota.py", "app_manager.py", "netutil.py",
-    "app_reaction_game.py", "app_dust_monitor.py",
+    "app_reaction_game.py", "app_dust_monitor.py", "app_idle.py",
 }
 
 # 웹 대시보드에 "OTA 마지막 확인" 상태를 보여주기 위한 값. 콘솔(Thonny)을

@@ -25,6 +25,7 @@ TRACKED_FILES = [
     "netutil.py",
     "app_reaction_game.py",
     "app_dust_monitor.py",
+    "app_idle.py",
 ]
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent

@@ -16,8 +16,12 @@ import os
 from console_log import log_error
 
 ACTIVE_APP_FILE = "active_app.json"
-DEFAULT_APP = "app_reaction_game"
+DEFAULT_APP = "app_idle"
 APP_PREFIX = "app_"
+
+# app_manager.py 자기 자신도 이름이 APP_PREFIX로 시작하지만 센서 앱이
+# 아니므로, /apps 목록에서 제외합니다.
+_NOT_AN_APP = {"app_manager"}
 
 REQUIRED_APP_ATTRS = [
     "read_dust_sensor",         # () -> (avg_voltage: float, value: float)
@@ -35,7 +39,10 @@ def list_available_apps():
         names = os.listdir()
     except Exception:
         return []
-    apps = [n[:-3] for n in names if n.startswith(APP_PREFIX) and n.endswith(".py")]
+    apps = [
+        n[:-3] for n in names
+        if n.startswith(APP_PREFIX) and n.endswith(".py") and n[:-3] not in _NOT_AN_APP
+    ]
     apps.sort()
     return apps
 
