@@ -416,7 +416,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico 미세먼지 IoT 모니터</title>
+    <title>Pico 반응속도 게임</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 20px 16px; -webkit-text-size-adjust: 100%; }}
@@ -446,7 +446,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
         {error_banner}
         <div class="mode-badge">{mode_badge_text}</div><br>
         <div class="status-badge" id="statusBadge">{status_kor} ({status_eng})</div>
-        <div class="value"><span id="dustVal">{dust_val:.1f}</span> <span class="unit">µg/m³</span></div>
+        <div class="value"><span id="dustVal">{dust_val:.0f}</span> <span class="unit">ms</span></div>
         <div class="sub-info">
             • <span class="live-dot"></span>실시간 로컬 연결: <b>정상</b><br>
             • 센서 출력 전압: <b id="voltVal">{volt_val:.2f} V</b><br>
@@ -482,7 +482,7 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
                 const res = await fetch('/data?t=' + Date.now());
                 if(res.ok) {{
                     const d = await res.json();
-                    document.getElementById('dustVal').innerText = d.density.toFixed(1);
+                    document.getElementById('dustVal').innerText = d.density.toFixed(0);
                     document.getElementById('voltVal').innerText = d.voltage.toFixed(2) + ' V';
                     document.getElementById('cloudVal').innerText = d.cloud;
                     document.getElementById('controlVal').innerText = 'Mute: ' + d.mute + ' / 기준: ' + d.thresh + 'µg';
@@ -1184,7 +1184,7 @@ def measure_and_update_lcd(lcd, state, display_toggle):
         if state.user_err:
             lcd.putstr("User Code Error ")
         else:
-            lcd.putstr("Dust:{:5.1f} ug/m3 ".format(state.avg_density))
+            lcd.putstr("React:{:5.0f} ms ".format(state.avg_density))
 
         lcd.move_to(0, 1)
         if display_toggle % 2 == 0:
@@ -1340,7 +1340,7 @@ def serve_until_reconnect_needed(lcd, state):
 
 def main():
     print("==========================================")
-    print(" 🛡️ Pico Dust Core System v2.0 가동")
+    print(" 🛡️ Pico Reaction Game System v2.0 가동")
     print("==========================================")
 
     lcd = init_lcd()
