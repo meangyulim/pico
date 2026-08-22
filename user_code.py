@@ -155,8 +155,7 @@ def play_alert_beep():
     pass  # 버저 없음
 
 
-def sync_with_google_sheets(density, voltage, status_str):
-    # 게임 모드에서는 클라우드 동기화를 쓰지 않습니다 (미세먼지용 시트에
-    # 반응속도 데이터를 섞지 않기 위함). 필요하면 여기서 별도 GAS_URL로
-    # 라운드 결과를 전송하도록 채워 넣으세요.
-    return True
+# sync_with_google_sheets를 일부러 정의하지 않았습니다. main.py는 이 함수가
+# 없으면 클라우드 동기화 스레드 자체를 아예 띄우지 않아서, 60초마다 core1을
+# 잠깐씩 점유하던 것도 사라져 OTA 확인과 부딪힐 일이 없어집니다. 필요해지면
+# 여기에 다시 정의하고 별도 GAS_URL로 라운드 결과를 전송하도록 채워 넣으세요.
