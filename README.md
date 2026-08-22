@@ -9,6 +9,7 @@ Raspberry Pi Pico 2 W(RP2350) + 미세먼지 센서 + 1602 LCD 기반 IoT 모니
 - `netutil.py` — 하드웨어 의존성 없는 순수 유틸리티 (`url_decode` 등). `main.py`가 이 파일을 import하므로 보드에 같이 올려야 하고, 데스크톱 파이썬에서 그대로 테스트할 수 있습니다.
 - `user_code.default.py` — `user_code.py`가 없을 때 자동 생성되는 기본 템플릿. 실제 로직과는 별도 파일로 관리되어 서로 내용이 어긋나지 않습니다.
 - `user_code.py` — 사용자 커스텀 로직 (센서 측정, 상태 판정, 구글 시트 연동). 이 파일에 오류가 있어도 `main.py`의 웹서버와 웹 에디터는 계속 동작합니다.
+- `manifest.json` — OTA 자동 업데이트용 파일별 sha256 해시 목록. 커밋 전 `python3 scripts/gen_manifest.py`로 재생성합니다 (CI가 최신 상태인지 확인).
 
 ## `user_code.py` 인터페이스 계약
 
@@ -41,6 +42,17 @@ Raspberry Pi Pico 2 W(RP2350) + 미세먼지 센서 + 1602 LCD 기반 IoT 모니
 4. 웹 대시보드(`/`)에서 실시간 미세먼지 농도·전압·상태를 확인하고, Wi-Fi를 설정할 수 있습니다.
 5. 웹 에디터(`/edit`)에서 원하는 파일을 스마트폰으로 직접 수정·생성·복원할 수 있습니다.
 6. `user_code.py`는 1분 주기로 Google Apps Script(GAS) 웹앱과 데이터를 주고받아 구글 시트에 기록하고, 원격으로 음소거/경보 임계치를 제어할 수 있습니다. 이 동기화는 RP2350의 두 번째 코어(`_thread`)에서 실행되어, 네트워크가 느리거나 응답이 없어도 웹서버·LCD·센서 측정은 멈추지 않습니다. (`_thread`를 지원하지 않는 빌드에서는 자동으로 기존 방식인 동기 호출로 폴백합니다.)
+7. Wi-Fi에 연결된 동안 3분마다 GitHub의 `manifest.json`을 확인해서, 바뀐 파일이 있으면 자동으로 받아 적용하고 재부팅합니다 (아래 OTA 자동 업데이트 참고).
+
+## OTA 자동 업데이트 (GitHub 자동 반영)
+
+Wi-Fi에 연결되어 있으면, 피코가 3분마다 이 저장소의 `main` 브랜치에 있는 `manifest.json`(파일별 sha256 해시만 담은 아주 작은 파일)을 확인합니다. 해시가 실제로 다른 파일만 골라 통째로 받아서 적용하므로, 평소엔 몇십 바이트만 오가고 진짜 코드가 바뀐 순간에만 무거운 다운로드가 일어납니다.
+
+- 추적 대상: `boot.py`, `main.py`, `netutil.py`, `user_code.py`, `user_code.default.py` (`main.py`의 `OTA_ALLOWED_TARGETS`)
+- 적용 전 받아온 내용의 해시를 다시 검증하고, 기존 내용은 웹 에디터와 동일하게 `.bak`으로 백업합니다.
+- 적용된 파일이 하나라도 있으면 재부팅합니다 — `main.py`가 바뀌었어도 `boot.py`의 롤백 안전망을 그대로 거칩니다.
+- **다른 리포로 포크했다면** `main.py`의 `OTA_REPO_RAW_BASE`를 본인 리포 주소로 바꾸세요. 끄고 싶으면 `OTA_ENABLED = False`로 설정하면 됩니다.
+- 리포를 고칠 때(특히 `main.py`, `user_code.py` 등) 커밋 전에 반드시 `python3 scripts/gen_manifest.py`를 실행해 `manifest.json`을 최신 상태로 맞춰야 합니다. CI가 이걸 확인합니다.
 
 ## 준비물
 
@@ -81,3 +93,4 @@ PR을 올리면 GitHub Actions(`.github/workflows/test.yml`)가 자동으로 같
 - `wifi_config.json`은 런타임에 보드에 저장되는 파일이라 저장소에는 포함하지 않습니다 (`.gitignore` 처리).
 - `user_code.py`를 완전히 지우거나 문법 오류를 내도, `main.py`가 기본 템플릿(`user_code.default.py`)을 자동 생성하고 웹 에디터로 복구할 수 있습니다.
 - `/edit`, `/save_code`, `/revert`에는 별도 인증이 없어 같은 네트워크에 있는 누구나 코드를 수정할 수 있습니다. 필요하면 추후 보완하세요.
+- OTA는 리포지토리가 public이라 별도 인증 없이 raw 파일을 받아옵니다. 인증서 체인 검증은 하지 않는 연결이라(기존 GAS 연동과 동일한 신뢰 수준) 완벽한 보안은 아니지만, 받아온 내용이 `manifest.json`의 해시와 일치하는지는 항상 확인합니다.

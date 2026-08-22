@@ -15,3 +15,7 @@ jobs:
           python-version: "3.11"
       - run: pip install pytest
       - run: pytest tests/ -v
+      - name: Check manifest.json is up to date (OTA)
+        run: |
+          python3 scripts/gen_manifest.py
+          git diff --exit-code manifest.json || (echo "::error::manifest.json is stale — run 'python3 scripts/gen_manifest.py' and commit the result" && exit 1)

@@ -793,6 +793,108 @@ def handle_save_code(conn, initial_body, content_length, target_file):
 
 
 # -----------------------------------------------------------------
+# [7b] OTA 자동 업데이트 (GitHub 폴링)
+# -----------------------------------------------------------------
+# 매번 전체 파일을 받으면 느린 Wi-Fi에서 부담이 크므로, 아주 작은
+# manifest.json(파일별 sha256 해시만 담음)만 주기적으로 확인하고,
+# 실제로 해시가 달라진 파일만 통째로 받아옵니다. main.py도 포함되므로
+# 적용 후에는 재부팅해서 boot.py의 안전망을 그대로 거칩니다.
+OTA_ENABLED = True
+OTA_REPO_RAW_BASE = "https://raw.githubusercontent.com/meangyulim/pico/main"
+OTA_MANIFEST_URL = OTA_REPO_RAW_BASE + "/manifest.json"
+OTA_CHECK_INTERVAL_MS = 3 * 60 * 1000  # manifest 확인 주기
+OTA_MAX_FILE_SIZE = 128 * 1024
+OTA_ALLOWED_TARGETS = {"boot.py", "main.py", "netutil.py", "user_code.py", "user_code.default.py"}
+
+_ota_lock = _thread.allocate_lock() if _THREADING_AVAILABLE else None
+_ota_busy = False
+
+def _run_ota_check():
+    global _ota_busy
+    changed_any = False
+    try:
+        res = urequests.get(OTA_MANIFEST_URL)
+        try:
+            manifest = res.json()
+        finally:
+            res.close()
+
+        for name, meta in manifest.items():
+            if name not in OTA_ALLOWED_TARGETS:
+                continue  # manifest에 엉뚱한 이름이 있어도 무시 (안전장치)
+            remote_hash_hex = meta.get("sha256", "")
+            if not remote_hash_hex:
+                continue
+            local_digest = _file_hash(name)
+            local_hash_hex = local_digest.hex() if local_digest else ""
+            if remote_hash_hex == local_hash_hex:
+                continue
+
+            res2 = urequests.get(OTA_REPO_RAW_BASE + "/" + name)
+            try:
+                content = res2.content
+            finally:
+                res2.close()
+
+            if len(content) > OTA_MAX_FILE_SIZE:
+                print(f"⚠️ [OTA] {name} 크기가 너무 커서 건너뜁니다 ({len(content)} bytes)")
+                continue
+
+            verify = hashlib.sha256()
+            verify.update(content)
+            if verify.digest().hex() != remote_hash_hex:
+                print(f"⚠️ [OTA] {name} 다운로드 내용이 매니페스트 해시와 달라 적용하지 않습니다.")
+                continue
+
+            _backup_file(name)
+            with open(name, "wb") as f:
+                f.write(content)
+            changed_any = True
+            print(f"⬇️ [OTA] {name} 업데이트 적용")
+    except Exception as e:
+        log_error("OTA 확인", e)
+    finally:
+        if _ota_lock:
+            _ota_lock.acquire()
+        _ota_busy = False
+        if _ota_lock:
+            _ota_lock.release()
+        gc.collect()
+
+    if changed_any:
+        print("🔄 [OTA] 변경 사항 적용 완료, 3초 후 재부팅합니다...")
+        utime.sleep(3)
+        machine.reset()
+
+def trigger_ota_check():
+    global _ota_busy
+    if not OTA_ENABLED:
+        return
+
+    if not _THREADING_AVAILABLE:
+        _run_ota_check()
+        return
+
+    _ota_lock.acquire()
+    already_busy = _ota_busy
+    if not already_busy:
+        _ota_busy = True
+    _ota_lock.release()
+
+    if already_busy:
+        print("⏭️ 이전 OTA 확인이 아직 진행 중이라 이번 주기는 건너뜁니다.")
+        return
+
+    try:
+        _thread.start_new_thread(_run_ota_check, ())
+    except Exception as e:
+        log_error("OTA 스레드 시작", e)
+        _ota_lock.acquire()
+        _ota_busy = False
+        _ota_lock.release()
+
+
+# -----------------------------------------------------------------
 # [8] HTTP 클라이언트 처리 (라우팅)
 # -----------------------------------------------------------------
 def _parse_request_path(first_line):
@@ -1144,6 +1246,7 @@ def serve_until_reconnect_needed(lcd, state):
     last_measure_time = utime.ticks_ms()
     last_cloud_sync_time = utime.ticks_ms() - sync_interval + 5000
     last_ap_retry_time = utime.ticks_ms()
+    last_ota_check_time = utime.ticks_ms() - OTA_CHECK_INTERVAL_MS + 10000
 
     try:
         while True:
@@ -1179,6 +1282,12 @@ def serve_until_reconnect_needed(lcd, state):
                 if utime.ticks_diff(now, last_cloud_sync_time) >= sync_interval:
                     last_cloud_sync_time = now
                     trigger_cloud_sync(state.user_mod, state.avg_density, state.avg_v, state.status_eng)
+
+            # C2. 주기적 OTA 확인 (GitHub manifest.json 폴링, 별도 코어에서 실행)
+            if state.mode == "ONLINE_STA" and wlan_sta.isconnected():
+                if utime.ticks_diff(now, last_ota_check_time) >= OTA_CHECK_INTERVAL_MS:
+                    last_ota_check_time = now
+                    trigger_ota_check()
 
             # D. 웹 요청 수신 및 즉각 처리
             conn = None
