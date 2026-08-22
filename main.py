@@ -333,6 +333,26 @@ def load_user_module():
 _bg_lock = _thread.allocate_lock() if _THREADING_AVAILABLE else None
 _bg_busy = False
 
+def _start_bg_thread(fn, args):
+    """
+    _thread.start_new_thread()을 시작합니다. RP2040/RP2350은 이전 스레드가
+    끝나서 busy 플래그가 지워진 직후에도, 실제 core1이 완전히 해제되기까지
+    아주 짧은 지연이 있어 곧바로 새 스레드를 시작하면 "OSError: core1 in use"가
+    날 수 있습니다. 그래서 실패하면 잠깐 쉬었다가 몇 번 더 시도합니다.
+    """
+    delays_ms = (50, 150, 400)
+    last_err = None
+    for delay_ms in (0,) + delays_ms:
+        if delay_ms:
+            utime.sleep_ms(delay_ms)
+        try:
+            _thread.start_new_thread(fn, args)
+            return True
+        except OSError as e:
+            last_err = e
+    log_error("백그라운드 스레드 시작", last_err)
+    return False
+
 def _run_cloud_sync(user_mod, density, voltage, status_eng):
     global _bg_busy
     try:
@@ -365,10 +385,7 @@ def trigger_cloud_sync(user_mod, density, voltage, status_eng):
         print("⏭️ 다른 백그라운드 작업(OTA 확인 등)이 core1에서 진행 중이라 이번 클라우드 동기화 주기는 건너뜁니다.")
         return
 
-    try:
-        _thread.start_new_thread(_run_cloud_sync, (user_mod, density, voltage, status_eng))
-    except Exception as e:
-        log_error("클라우드 동기화 스레드 시작", e)
+    if not _start_bg_thread(_run_cloud_sync, (user_mod, density, voltage, status_eng)):
         _bg_lock.acquire()
         _bg_busy = False
         _bg_lock.release()
@@ -805,7 +822,8 @@ def handle_save_code(conn, initial_body, content_length, target_file):
 OTA_ENABLED = True
 OTA_REPO_RAW_BASE = "https://raw.githubusercontent.com/meangyulim/pico/main"
 OTA_MANIFEST_URL = OTA_REPO_RAW_BASE + "/manifest.json"
-OTA_CHECK_INTERVAL_MS = 3 * 60 * 1000  # manifest 확인 주기
+OTA_CHECK_INTERVAL_MS = 47 * 1000  # manifest 확인 주기. 클라우드 동기화(60초)와
+# 딱 맞물리지 않게 일부러 60의 배수가 아닌 값을 씀 (겹칠 확률을 줄임)
 OTA_MAX_FILE_SIZE = 128 * 1024
 OTA_ALLOWED_TARGETS = {"boot.py", "main.py", "netutil.py", "user_code.py", "user_code.default.py"}
 
@@ -885,10 +903,7 @@ def trigger_ota_check():
         print("⏭️ 다른 백그라운드 작업(클라우드 동기화 등)이 core1에서 진행 중이라 이번 OTA 확인 주기는 건너뜁니다.")
         return
 
-    try:
-        _thread.start_new_thread(_run_ota_check, ())
-    except Exception as e:
-        log_error("OTA 스레드 시작", e)
+    if not _start_bg_thread(_run_ota_check, ()):
         _bg_lock.acquire()
         _bg_busy = False
         _bg_lock.release()
