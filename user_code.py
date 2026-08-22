@@ -102,7 +102,7 @@ def sync_with_google_sheets(dust_val, volt_val, status_str):
     })
     headers = {"Content-Type": "application/json"}
     
-    print(f"☁️ [GAS 클라우드 전송 중...] Dust: {dust_val:.1f} ug/m3")
+    print(f"☁️ [GAS 클라우드 전송 중... (OTA 테스트 반영됨)] Dust: {dust_val:.1f} ug/m3")
     res = None
     try:
         # 1. POST 전송
