@@ -36,10 +36,16 @@ except ImportError:
 CONFIG_FILE = "wifi_config.json"
 USER_FILE = "user_code.py"
 USER_FILE_TEMPLATE = "user_code.default.py"
-MAX_USER_CODE_SIZE = 64 * 1024  # user_code.py 저장 최대 크기 (64KB)
+MAX_EDIT_FILE_SIZE = 64 * 1024  # 웹 에디터로 저장 가능한 파일 최대 크기 (64KB)
 AP_SSID = "Pico-Dust-Setup"     # 피코 단독 핫스팟(AP) 이름
 AP_PASS = ""                    # 비밀번호 (빈칸 = 공개 오픈 AP)
 AP_IP = "192.168.4.1"
+AP_RETRY_INTERVAL_MS = 3 * 60 * 1000  # AP(오프라인) 모드에서 저장된 Wi-Fi를 재시도하는 주기
+
+# 웹 에디터의 파일 목록/편집 대상에서 제외하는 이름들.
+# boot.py는 부팅 안전망(boot.py 참고)이라 절대 웹으로 수정하지 않습니다.
+EDITOR_EXCLUDED_FILES = {"boot.py"}
+EDITOR_EXCLUDED_SUFFIXES = (".bak", ".json", ".tmp")
 
 # user_code.py가 구현해야 하는 인터페이스 계약.
 # main.py는 이 항목들을 hasattr/getattr로 조회해서 있으면 쓰고 없으면
@@ -57,6 +63,16 @@ REQUIRED_USER_ATTRS = [
 
 def log_error(context, exc):
     print(f"⚠️ [{context}] {type(exc).__name__}: {exc}")
+
+
+# 예전에는 여기서 machine.WDT(하드웨어 워치독)로 "예외 없는 무한루프"까지 잡으려
+# 했지만, RP2040/RP2350의 WDT는 한번 켜면 재부팅 전까지 끌 수 없어서 Thonny에서
+# 스크립트를 정지(REPL로 전환)하면 feed가 끊겨 계속 강제 재부팅되는 문제가 있었습니다
+# (개발용 시리얼 연결이 계속 끊김). 그래서 제거했습니다 — main.py가 예외로 실패하는
+# 경우(대부분의 버그)는 boot.py가 여전히 자동 복구하고, 예외 없는 무한루프는 이제
+# 자동 복구 대상이 아닙니다 (README 참고).
+def feed_watchdog():
+    pass
 
 
 def validate_user_module(user_mod):
@@ -198,7 +214,12 @@ def scan_nearby_wifis():
         log_error("WiFi 스캔", e)
         return []
 
-def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None):
+def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3):
+    """
+    저장된 SSID/비밀번호로 접속을 시도합니다. 신호가 순간적으로 불안정해서
+    첫 시도가 실패하는 경우가 흔해서, 포기하고 AP 모드로 넘어가기 전에
+    같은 정보로 여러 번(기본 3회) 재시도합니다.
+    """
     if not ssid:
         return False, None
 
@@ -206,33 +227,39 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None):
     ap.active(False)
 
     sta = network.WLAN(network.STA_IF)
-    sta.active(True)
-    disable_wifi_power_save(sta)
 
-    if password:
-        sta.connect(ssid, password)
-    else:
-        sta.connect(ssid)
+    for attempt in range(1, attempts + 1):
+        sta.active(False)
+        utime.sleep_ms(200)
+        sta.active(True)
+        disable_wifi_power_save(sta)
 
-    print(f"⏳ Wi-Fi [{ssid}] 접속 시도 중...")
-    if lcd_ref:
-        lcd_ref.display_2lines("Connecting WiFi", ssid[:16])
+        if password:
+            sta.connect(ssid, password)
+        else:
+            sta.connect(ssid)
 
-    t = timeout_sec
-    while t > 0:
-        if sta.isconnected():
-            disable_wifi_power_save(sta)
-            set_custom_dns(sta, "8.8.8.8")
-            ip = sta.ifconfig()[0]
-            print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
-            if lcd_ref:
-                lcd_ref.display_2lines("WiFi Connected!", ip[:16])
-                utime.sleep(1.5)
-            return True, ip
-        utime.sleep(1)
-        t -= 1
+        print(f"⏳ Wi-Fi [{ssid}] 접속 시도 중... ({attempt}/{attempts})")
+        if lcd_ref:
+            lcd_ref.display_2lines(f"WiFi try {attempt}/{attempts}", ssid[:16])
 
-    print("❌ Wi-Fi 연결 실패 (신호 없음 또는 비밀번호 불일치)")
+        t = timeout_sec
+        while t > 0:
+            feed_watchdog()
+            if sta.isconnected():
+                disable_wifi_power_save(sta)
+                set_custom_dns(sta, "8.8.8.8")
+                ip = sta.ifconfig()[0]
+                print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
+                if lcd_ref:
+                    lcd_ref.display_2lines("WiFi Connected!", ip[:16])
+                    utime.sleep(1.5)
+                return True, ip
+            utime.sleep(1)
+            t -= 1
+
+        print(f"❌ Wi-Fi 연결 실패 (시도 {attempt}/{attempts})")
+
     return False, None
 
 def start_ap_mode(lcd_ref=None):
@@ -453,14 +480,72 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
     return html
 
 
-def generate_editor_html(code_text):
-    escaped_code = code_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+def generate_file_list_html(files):
+    rows = ""
+    for name in files:
+        rows += f'<a href="/edit?file={name}" class="file-row">📄 {name}</a>'
+    if not rows:
+        rows = '<p style="color:#94a3b8;font-size:13px;">편집 가능한 파일이 없습니다.</p>'
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico user_code.py 웹 에디터</title>
+    <title>Pico 파일 브라우저</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; -webkit-text-size-adjust: 100%; }}
+        h3 {{ font-size: 16px; color: #38bdf8; margin-bottom: 4px; }}
+        .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
+        .note {{ font-size: 12px; color: #94a3b8; margin-bottom: 14px; line-height: 1.5; }}
+        .file-list {{ display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }}
+        .file-row {{ display: block; padding: 12px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 10px; color: #f1f5f9; text-decoration: none; font-size: 14px; }}
+        .file-row:active {{ background: #334155; }}
+        .new-file {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }}
+        label {{ display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: #cbd5e1; }}
+        input[type="text"] {{ width: 100%; padding: 10px 12px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 16px; }}
+        .btn {{ width: 100%; padding: 12px; background: #0284c7; color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h3>📁 파일 브라우저</h3>
+        <a href="/" class="back-btn">⬅ 메인으로</a>
+    </div>
+    <div class="note">boot.py는 부팅 안전망이라 목록에서 제외됩니다. main.py를 포함한 다른 모든 .py 파일을 수정할 수 있으며, 저장할 때마다 이전 버전이 자동 백업됩니다.</div>
+
+    <div class="file-list">
+        {rows}
+    </div>
+
+    <div class="new-file">
+        <form action="/edit" method="GET">
+            <label>새 파일 이름 (.py)</label>
+            <input type="text" name="file" placeholder="예: sensor2.py" required>
+            <button type="submit" class="btn">파일 만들기 / 열기</button>
+        </form>
+    </div>
+</body>
+</html>"""
+    return html
+
+
+def generate_editor_html(target_file, code_text, has_backup):
+    escaped_code = code_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    if target_file == "main.py":
+        safe_note = "🛡️ 이 파일이 깨지면 boot.py가 자동으로 이전 버전으로 복구합니다"
+    else:
+        safe_note = "🛡️ 실수해도 시스템은 안 죽습니다 (main.py가 오류를 격리합니다)"
+    revert_btn = f'<a href="/revert?file={target_file}" class="tool-btn" style="text-decoration:none;display:block;" onclick="return confirm(\'{target_file}을(를) 이전 저장본으로 되돌리고 재부팅할까요?\');">↩️ 이전 버전</a>' if has_backup else ""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pico {target_file} 웹 에디터</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 12px; -webkit-text-size-adjust: 100%; }}
@@ -469,7 +554,7 @@ def generate_editor_html(code_text):
         .safe-tag {{ display: inline-block; font-size: 11px; background: #065f46; color: #34d399; padding: 3px 8px; border-radius: 6px; font-weight: bold; margin-bottom: 8px; }}
         .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
 
-        .toolbar {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }}
+        .toolbar {{ display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }}
         .tool-btn {{ padding: 10px 4px; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; text-align: center; }}
         .tool-btn:active {{ background: #334155; }}
 
@@ -486,25 +571,26 @@ def generate_editor_html(code_text):
 <body>
     <div id="toast"></div>
     <div class="header">
-        <h3>📝 user_code.py 웹 에디터</h3>
-        <a href="/" class="back-btn">⬅ 메인으로</a>
+        <h3>📝 {target_file} 편집</h3>
+        <a href="/edit" class="back-btn">⬅ 파일 목록</a>
     </div>
-    <div class="safe-tag">🛡️ 시스템 코어 보호 중 (코드를 다 지워도 웹 에디터는 안전합니다)</div>
+    <div class="safe-tag">{safe_note}</div>
 
     <div class="toolbar">
         <button type="button" class="tool-btn" onclick="copyAllCode()">📋 전체 복사</button>
         <button type="button" class="tool-btn" onclick="pasteFromClipboard()">📄 붙여넣기</button>
         <button type="button" class="tool-btn" style="color:#ef4444;" onclick="clearAllCode()">🗑️ 전체 지우기</button>
+        {revert_btn}
     </div>
 
-    <form action="/save_code" method="POST" id="codeForm">
+    <form action="/save_code?file={target_file}" method="POST" id="codeForm">
         <textarea name="code" id="codeArea" spellcheck="false" required>{escaped_code}</textarea>
-        <button type="submit" class="btn-save" onclick="return confirm('user_code.py를 저장하고 피코를 재부팅하시겠습니까?');">💾 user_code.py 저장 및 피코 재부팅</button>
+        <button type="submit" class="btn-save" onclick="return confirm('{target_file}을(를) 저장하고 피코를 재부팅하시겠습니까?');">💾 저장 및 피코 재부팅</button>
     </form>
 
     <div class="note">
         ※ 16px 폰트 고정으로 아이폰 자동 확대가 방지됩니다.<br>
-        ※ 저장 시 user_code.py 파일로 덮어쓰고, 내용이 바뀐 경우에만 피코가 자동 재부팅됩니다.
+        ※ 저장 시 {target_file} 파일로 덮어쓰고(이전 내용은 자동 백업), 내용이 바뀐 경우에만 피코가 자동 재부팅됩니다.
     </div>
 
     <script>
@@ -586,15 +672,32 @@ def _file_hash(path):
     except Exception:
         return None
 
-def handle_save_code(conn, initial_body, content_length):
+def _backup_file(path):
+    """path가 존재하면 path+'.bak'으로 복사합니다 (덮어쓰기 전 안전망)."""
+    try:
+        os.stat(path)
+    except OSError:
+        return
+    try:
+        with open(path, "rb") as src, open(path + ".bak", "wb") as dst:
+            while True:
+                buf = src.read(512)
+                if not buf:
+                    break
+                dst.write(buf)
+    except Exception as e:
+        log_error("파일 백업", e)
+
+def handle_save_code(conn, initial_body, content_length, target_file):
     """
-    POST로 전송된 대용량 폼 데이터를 스트리밍 방식으로 수신 및 URL 디코딩하여 user_code.py에 안전하게 저장.
+    POST로 전송된 대용량 폼 데이터를 스트리밍 방식으로 수신 및 URL 디코딩하여
+    target_file에 안전하게 저장합니다 (내용이 바뀐 경우 저장 전 자동 백업).
     반환값: (성공 여부, 메시지, 기존 파일과 내용이 달라졌는지)
     """
-    if content_length > MAX_USER_CODE_SIZE:
-        return False, f"코드 크기가 너무 큽니다 ({content_length} > {MAX_USER_CODE_SIZE} bytes)", False
+    if content_length > MAX_EDIT_FILE_SIZE:
+        return False, f"코드 크기가 너무 큽니다 ({content_length} > {MAX_EDIT_FILE_SIZE} bytes)", False
 
-    old_hash = _file_hash(USER_FILE)
+    old_hash = _file_hash(target_file)
 
     body_stream = [initial_body]
     bytes_read = len(initial_body)
@@ -667,8 +770,12 @@ def handle_save_code(conn, initial_body, content_length):
         # 파일 저장 검증
         stat = os.stat(temp_file)
         if stat[6] > 10:
+            new_hash = new_hash_ctx.digest()
+            changed = (old_hash != new_hash)
+            if changed:
+                _backup_file(target_file)
             with open(temp_file, "rb") as f_src:
-                with open(USER_FILE, "wb") as f_dst:
+                with open(target_file, "wb") as f_dst:
                     while True:
                         buf = f_src.read(1024)
                         if not buf:
@@ -678,8 +785,6 @@ def handle_save_code(conn, initial_body, content_length):
                 os.remove(temp_file)
             except Exception:
                 pass
-            new_hash = new_hash_ctx.digest()
-            changed = (old_hash != new_hash)
             return True, f"저장 성공 ({stat[6]} bytes)", changed
         else:
             return False, "저장된 파일 내용이 비어있습니다.", False
@@ -690,6 +795,42 @@ def handle_save_code(conn, initial_body, content_length):
 # -----------------------------------------------------------------
 # [8] HTTP 클라이언트 처리 (라우팅)
 # -----------------------------------------------------------------
+def _parse_request_path(first_line):
+    """'GET /edit?file=main.py HTTP/1.1' -> ('/edit', {'file': 'main.py'})"""
+    try:
+        target = first_line.split(' ')[1]
+    except Exception:
+        target = ""
+    if '?' in target:
+        path, query = target.split('?', 1)
+    else:
+        path, query = target, ""
+    params = {}
+    for item in query.split('&'):
+        if '=' in item:
+            k, v = item.split('=', 1)
+            params[k] = url_decode(v)
+    return path, params
+
+def _is_valid_editable_filename(name):
+    if not name or '/' in name or '\\' in name or '..' in name:
+        return False
+    if name in EDITOR_EXCLUDED_FILES:
+        return False
+    if any(name.endswith(suf) for suf in EDITOR_EXCLUDED_SUFFIXES):
+        return False
+    return name.endswith(".py")
+
+def _list_editable_files():
+    try:
+        names = os.listdir()
+    except Exception:
+        return []
+    files = [n for n in names if _is_valid_editable_filename(n)]
+    files.sort()
+    return files
+
+
 class LoopState:
     """웹 요청 핸들러가 참조하는, 매 측정 주기마다 갱신되는 공유 상태."""
     def __init__(self):
@@ -752,23 +893,47 @@ def handle_client(conn, state):
     elif "GET /favicon.ico" in first_line:
         conn.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
 
-    # 3) 웹 에디터 화면 요청 (/edit -> user_code.py 편집)
+    # 3) 웹 에디터 화면 요청 (/edit -> 파일 목록, 또는 /edit?file=<name> -> 편집)
     elif "GET /edit" in first_line:
-        try:
-            with open(USER_FILE, "r") as f:
-                code_text = f.read()
-        except Exception as err:
-            code_text = f"# {USER_FILE} 읽기 실패: {err}"
+        _, params = _parse_request_path(first_line)
+        target_file = params.get('file', '').strip()
 
-        editor_html = generate_editor_html(code_text)
-        resp_bytes = editor_html.encode('utf-8')
-        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
-        conn.sendall(header.encode('utf-8'))
-        conn.sendall(resp_bytes)
-        gc.collect()
+        if not target_file:
+            listing_html = generate_file_list_html(_list_editable_files())
+            resp_bytes = listing_html.encode('utf-8')
+            header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
+            conn.sendall(header.encode('utf-8'))
+            conn.sendall(resp_bytes)
+        elif not _is_valid_editable_filename(target_file):
+            err_html = f"<!DOCTYPE html><html><body style='background:#0f172a;color:#fff;text-align:center;padding:50px 20px;'><h2>❌ 편집할 수 없는 파일입니다</h2><p>{target_file}</p><a href='/edit' style='color:#38bdf8;'>파일 목록으로</a></body></html>"
+            resp_b = err_html.encode('utf-8')
+            header = f"HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+            conn.sendall(header.encode('utf-8') + resp_b)
+        else:
+            try:
+                with open(target_file, "r") as f:
+                    code_text = f.read()
+            except Exception:
+                code_text = ""  # 아직 없는 파일 -> 새로 만드는 셈
 
-    # 4) 수정한 코드 저장 및 재부팅 (/save_code -> user_code.py에 저장)
+            try:
+                os.stat(target_file + ".bak")
+                has_backup = True
+            except OSError:
+                has_backup = False
+
+            editor_html = generate_editor_html(target_file, code_text, has_backup)
+            resp_bytes = editor_html.encode('utf-8')
+            header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
+            conn.sendall(header.encode('utf-8'))
+            conn.sendall(resp_bytes)
+            gc.collect()
+
+    # 4) 수정한 코드 저장 및 재부팅 (/save_code?file=<name> -> 해당 파일에 저장)
     elif "POST /save_code" in first_line:
+        _, params = _parse_request_path(first_line)
+        target_file = params.get('file', '').strip()
+
         content_length = 0
         for line in header_bytes.split(b"\r\n"):
             if line.lower().startswith(b"content-length:"):
@@ -777,27 +942,64 @@ def handle_client(conn, state):
                 except Exception:
                     pass
 
-        success, msg, changed = handle_save_code(conn, initial_body, content_length)
-        if success and changed:
-            resp_html = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>저장 완료</title><style>body{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}h2{color:#22c55e;margin-bottom:15px;}.btn{display:inline-block;padding:10px 20px;background:#0284c7;color:#fff;text-decoration:none;border-radius:8px;margin-top:20px;font-weight:bold;}</style></head><body><h2>✅ user_code.py 저장 완료!</h2><p>피코를 자동으로 재부팅합니다... (약 5초 후 새로고침)</p><a href="/" class="btn">메인으로 이동</a><script>setTimeout(()=>{location.href='/';}, 5000);</script></body></html>"""
+        if not _is_valid_editable_filename(target_file):
+            err_html = f"<!DOCTYPE html><html><body style='background:#0f172a;color:#fff;text-align:center;padding:50px 20px;'><h2>❌ 저장 실패</h2><p>편집할 수 없는 파일명입니다: {target_file}</p><a href='/edit' style='color:#38bdf8;'>파일 목록으로</a></body></html>"
+            resp_b = err_html.encode('utf-8')
+            header = f"HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+            conn.sendall(header.encode('utf-8') + resp_b)
+        else:
+            success, msg, changed = handle_save_code(conn, initial_body, content_length, target_file)
+            if success and changed:
+                resp_html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>저장 완료</title><style>body{{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}}h2{{color:#22c55e;margin-bottom:15px;}}.btn{{display:inline-block;padding:10px 20px;background:#0284c7;color:#fff;text-decoration:none;border-radius:8px;margin-top:20px;font-weight:bold;}}</style></head><body><h2>✅ {target_file} 저장 완료!</h2><p>피코를 자동으로 재부팅합니다... (약 5초 후 새로고침)</p><a href="/" class="btn">메인으로 이동</a><script>setTimeout(()=>{{location.href='/';}}, 5000);</script></body></html>"""
+                resp_b = resp_html.encode('utf-8')
+                header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+                conn.sendall(header.encode('utf-8') + resp_b)
+                conn.close()
+                print(f"🔄 {target_file} 저장 완료! 1초 후 피코를 재부팅합니다...")
+                utime.sleep(1)
+                machine.reset()
+            elif success and not changed:
+                resp_html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>저장 완료</title><style>body{{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}}h2{{color:#38bdf8;margin-bottom:15px;}}.btn{{display:inline-block;padding:10px 20px;background:#0284c7;color:#fff;text-decoration:none;border-radius:8px;margin-top:20px;font-weight:bold;}}</style></head><body><h2>💾 저장 완료 (변경 없음)</h2><p>기존 내용과 동일해 재부팅은 하지 않았습니다.</p><a href="/edit?file={target_file}" class="btn">에디터로 돌아가기</a></body></html>"""
+                resp_b = resp_html.encode('utf-8')
+                header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+                conn.sendall(header.encode('utf-8') + resp_b)
+            else:
+                err_html = f"<!DOCTYPE html><html><body style='background:#0f172a;color:#fff;text-align:center;padding:50px 20px;'><h2>❌ 저장 실패</h2><p>{msg}</p><a href='/edit?file={target_file}' style='color:#38bdf8;'>에디터로 돌아가기</a></body></html>"
+                resp_b = err_html.encode('utf-8')
+                status_line = "413 Payload Too Large" if "너무 큽니다" in msg else "500 Internal Server Error"
+                header = f"HTTP/1.1 {status_line}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+                conn.sendall(header.encode('utf-8') + resp_b)
+
+    # 4b) 이전 저장본으로 되돌리기 (/revert?file=<name>)
+    elif "GET /revert" in first_line:
+        _, params = _parse_request_path(first_line)
+        target_file = params.get('file', '').strip()
+        reverted = False
+        if _is_valid_editable_filename(target_file):
+            backup_path = target_file + ".bak"
+            try:
+                os.stat(backup_path)
+                try:
+                    os.remove(target_file)
+                except OSError:
+                    pass
+                os.rename(backup_path, target_file)
+                reverted = True
+                print(f"↩️ {target_file}을(를) 이전 버전으로 되돌렸습니다.")
+            except OSError:
+                pass
+
+        if reverted:
+            resp_html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>복원 완료</title><style>body{{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}}h2{{color:#22c55e;margin-bottom:15px;}}</style></head><body><h2>↩️ {target_file} 이전 버전으로 복원 완료</h2><p>피코를 재부팅합니다...</p></body></html>"""
             resp_b = resp_html.encode('utf-8')
             header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
             conn.sendall(header.encode('utf-8') + resp_b)
             conn.close()
-            print(f"🔄 {USER_FILE} 저장 완료! 1초 후 피코를 재부팅합니다...")
             utime.sleep(1)
             machine.reset()
-        elif success and not changed:
-            resp_html = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>저장 완료</title><style>body{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}h2{color:#38bdf8;margin-bottom:15px;}.btn{display:inline-block;padding:10px 20px;background:#0284c7;color:#fff;text-decoration:none;border-radius:8px;margin-top:20px;font-weight:bold;}</style></head><body><h2>💾 저장 완료 (변경 없음)</h2><p>기존 내용과 동일해 재부팅은 하지 않았습니다.</p><a href="/edit" class="btn">에디터로 돌아가기</a></body></html>"""
-            resp_b = resp_html.encode('utf-8')
-            header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
-            conn.sendall(header.encode('utf-8') + resp_b)
         else:
-            err_html = f"<!DOCTYPE html><html><body style='background:#0f172a;color:#fff;text-align:center;padding:50px 20px;'><h2>❌ 저장 실패</h2><p>{msg}</p><a href='/edit' style='color:#38bdf8;'>에디터로 돌아가기</a></body></html>"
-            resp_b = err_html.encode('utf-8')
-            status_line = "413 Payload Too Large" if "너무 큽니다" in msg else "500 Internal Server Error"
-            header = f"HTTP/1.1 {status_line}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
-            conn.sendall(header.encode('utf-8') + resp_b)
+            resp = f"HTTP/1.1 303 See Other\r\nLocation: /edit?file={target_file}\r\nConnection: close\r\n\r\n"
+            conn.sendall(resp.encode('utf-8'))
 
     # 5) Wi-Fi 설정 저장 (/save)
     elif "GET /save" in first_line:
@@ -941,9 +1143,11 @@ def serve_until_reconnect_needed(lcd, state):
 
     last_measure_time = utime.ticks_ms()
     last_cloud_sync_time = utime.ticks_ms() - sync_interval + 5000
+    last_ap_retry_time = utime.ticks_ms()
 
     try:
         while True:
+            feed_watchdog()
             now = utime.ticks_ms()
 
             # A. Wi-Fi 끊김 감지 -> AP 모드 복귀
@@ -951,6 +1155,19 @@ def serve_until_reconnect_needed(lcd, state):
                 print("⚠️ 공유기 Wi-Fi 끊김 감지 -> 오프라인 AP 모드로 전환")
                 server_socket.close()
                 return
+
+            # A2. 오프라인 AP 모드에서도 저장된 Wi-Fi를 주기적으로 백그라운드
+            # 재시도. 비밀번호를 이미 올바르게 입력해뒀는데 공유기/신호 문제로
+            # 접속이 안 됐을 뿐이라면, 사용자가 다시 입력할 필요 없이 알아서
+            # 복구되도록 함. (연결 시도 중 잠깐 AP가 끊기는 건 감수)
+            if state.mode == "OFFLINE_AP":
+                if utime.ticks_diff(now, last_ap_retry_time) >= AP_RETRY_INTERVAL_MS:
+                    last_ap_retry_time = now
+                    saved_config = load_wifi_config()
+                    if saved_config and saved_config.get("ssid"):
+                        print("🔁 오프라인 AP 모드에서 저장된 Wi-Fi 재접속 시도...")
+                        server_socket.close()
+                        return
 
             # B. 주기적 센서 측정 & LCD & 버저
             if utime.ticks_diff(now, last_measure_time) >= meas_interval:
@@ -967,7 +1184,9 @@ def serve_until_reconnect_needed(lcd, state):
             conn = None
             try:
                 conn, addr = server_socket.accept()
-                conn.settimeout(1.0)
+                # main.py를 웹 에디터로 열면 파일 전체(수십 KB)를 보내야 해서
+                # 느린 Wi-Fi에서는 1초로는 부족할 수 있어 여유 있게 늘림.
+                conn.settimeout(5.0)
                 wifi_saved = handle_client(conn, state)
                 conn.close()
                 if wifi_saved:
