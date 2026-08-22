@@ -321,30 +321,33 @@ def load_user_module():
 
 
 # -----------------------------------------------------------------
-# [5] 클라우드 동기화 비동기 실행 (RP2350 두 번째 코어 활용)
+# [5] 백그라운드(두 번째 코어) 작업 실행 — 클라우드 동기화 & OTA 확인
 # -----------------------------------------------------------------
 # urequests에는 타임아웃이 없어서 네트워크가 불안정하면 요청이 오래 멈출 수
 # 있습니다. 메인 루프(웹서버/LCD/센서 측정)가 이 때문에 함께 멈추지 않도록
-# 동기화만 별도 코어(스레드)에서 수행합니다. _thread를 쓸 수 없는 빌드에서는
-# 기존처럼 동기 호출로 자동 폴백합니다.
-_sync_lock = _thread.allocate_lock() if _THREADING_AVAILABLE else None
-_sync_busy = False
+# 클라우드 동기화·OTA 확인을 별도 코어(스레드)에서 수행합니다.
+# RP2040/RP2350은 보조 코어(core1)가 하나뿐이라 _thread로 동시에 하나의
+# 스레드만 띄울 수 있습니다 — 그래서 이 두 작업은 락/busy 플래그를 공유해서
+# 서로 겹치지 않게 순서를 양보합니다 (동시에 시도하면 "core1 in use" 오류가 남).
+# _thread를 쓸 수 없는 빌드에서는 기존처럼 동기 호출로 자동 폴백합니다.
+_bg_lock = _thread.allocate_lock() if _THREADING_AVAILABLE else None
+_bg_busy = False
 
 def _run_cloud_sync(user_mod, density, voltage, status_eng):
-    global _sync_busy
+    global _bg_busy
     try:
         user_mod.sync_with_google_sheets(density, voltage, status_eng)
     except Exception as e:
         log_error("클라우드 동기화", e)
     finally:
-        if _sync_lock:
-            _sync_lock.acquire()
-        _sync_busy = False
-        if _sync_lock:
-            _sync_lock.release()
+        if _bg_lock:
+            _bg_lock.acquire()
+        _bg_busy = False
+        if _bg_lock:
+            _bg_lock.release()
 
 def trigger_cloud_sync(user_mod, density, voltage, status_eng):
-    global _sync_busy
+    global _bg_busy
     if not (user_mod and hasattr(user_mod, 'sync_with_google_sheets')):
         return
 
@@ -352,23 +355,23 @@ def trigger_cloud_sync(user_mod, density, voltage, status_eng):
         _run_cloud_sync(user_mod, density, voltage, status_eng)
         return
 
-    _sync_lock.acquire()
-    already_busy = _sync_busy
+    _bg_lock.acquire()
+    already_busy = _bg_busy
     if not already_busy:
-        _sync_busy = True
-    _sync_lock.release()
+        _bg_busy = True
+    _bg_lock.release()
 
     if already_busy:
-        print("⏭️ 이전 클라우드 동기화가 아직 진행 중이라 이번 주기는 건너뜁니다.")
+        print("⏭️ 다른 백그라운드 작업(OTA 확인 등)이 core1에서 진행 중이라 이번 클라우드 동기화 주기는 건너뜁니다.")
         return
 
     try:
         _thread.start_new_thread(_run_cloud_sync, (user_mod, density, voltage, status_eng))
     except Exception as e:
         log_error("클라우드 동기화 스레드 시작", e)
-        _sync_lock.acquire()
-        _sync_busy = False
-        _sync_lock.release()
+        _bg_lock.acquire()
+        _bg_busy = False
+        _bg_lock.release()
 
 
 # -----------------------------------------------------------------
@@ -806,11 +809,8 @@ OTA_CHECK_INTERVAL_MS = 3 * 60 * 1000  # manifest 확인 주기
 OTA_MAX_FILE_SIZE = 128 * 1024
 OTA_ALLOWED_TARGETS = {"boot.py", "main.py", "netutil.py", "user_code.py", "user_code.default.py"}
 
-_ota_lock = _thread.allocate_lock() if _THREADING_AVAILABLE else None
-_ota_busy = False
-
 def _run_ota_check():
-    global _ota_busy
+    global _bg_busy
     changed_any = False
     try:
         res = urequests.get(OTA_MANIFEST_URL)
@@ -854,11 +854,11 @@ def _run_ota_check():
     except Exception as e:
         log_error("OTA 확인", e)
     finally:
-        if _ota_lock:
-            _ota_lock.acquire()
-        _ota_busy = False
-        if _ota_lock:
-            _ota_lock.release()
+        if _bg_lock:
+            _bg_lock.acquire()
+        _bg_busy = False
+        if _bg_lock:
+            _bg_lock.release()
         gc.collect()
 
     if changed_any:
@@ -867,7 +867,7 @@ def _run_ota_check():
         machine.reset()
 
 def trigger_ota_check():
-    global _ota_busy
+    global _bg_busy
     if not OTA_ENABLED:
         return
 
@@ -875,23 +875,23 @@ def trigger_ota_check():
         _run_ota_check()
         return
 
-    _ota_lock.acquire()
-    already_busy = _ota_busy
+    _bg_lock.acquire()
+    already_busy = _bg_busy
     if not already_busy:
-        _ota_busy = True
-    _ota_lock.release()
+        _bg_busy = True
+    _bg_lock.release()
 
     if already_busy:
-        print("⏭️ 이전 OTA 확인이 아직 진행 중이라 이번 주기는 건너뜁니다.")
+        print("⏭️ 다른 백그라운드 작업(클라우드 동기화 등)이 core1에서 진행 중이라 이번 OTA 확인 주기는 건너뜁니다.")
         return
 
     try:
         _thread.start_new_thread(_run_ota_check, ())
     except Exception as e:
         log_error("OTA 스레드 시작", e)
-        _ota_lock.acquire()
-        _ota_busy = False
-        _ota_lock.release()
+        _bg_lock.acquire()
+        _bg_busy = False
+        _bg_lock.release()
 
 
 # -----------------------------------------------------------------
