@@ -822,7 +822,8 @@ def handle_save_code(conn, initial_body, content_length, target_file):
 OTA_ENABLED = True
 OTA_REPO_RAW_BASE = "https://raw.githubusercontent.com/meangyulim/pico/main"
 OTA_MANIFEST_URL = OTA_REPO_RAW_BASE + "/manifest.json"
-OTA_CHECK_INTERVAL_MS = 3 * 60 * 1000  # manifest 확인 주기
+OTA_CHECK_INTERVAL_MS = 47 * 1000  # manifest 확인 주기. 클라우드 동기화(60초)와
+# 딱 맞물리지 않게 일부러 60의 배수가 아닌 값을 씀 (겹칠 확률을 줄임)
 OTA_MAX_FILE_SIZE = 128 * 1024
 OTA_ALLOWED_TARGETS = {"boot.py", "main.py", "netutil.py", "user_code.py", "user_code.default.py"}
 
