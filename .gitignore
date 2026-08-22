@@ -2,3 +2,4 @@ wifi_config.json
 user_code_tmp.py
 __pycache__/
 *.pyc
+.pytest_cache/
