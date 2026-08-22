@@ -1,4 +1,5 @@
 wifi_config.json
+active_app.json
 user_code_tmp.py
 __pycache__/
 *.pyc

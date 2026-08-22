@@ -1,17 +1,41 @@
 {
+  "app_dust_monitor.py": {
+    "sha256": "149ef7acda616b4920263170b1f62a0341016b0815e5926b5fd9f8aec7dd3786"
+  },
+  "app_manager.py": {
+    "sha256": "d1627e8340f00f6a4be1afde6f993336477956412c6fe8b4c0e75f745a04a574"
+  },
+  "app_reaction_game.py": {
+    "sha256": "95e28ba6c8a92355842a14ee5a284998a1c4e1e5c32b0626e5fe0b3e96bc4905"
+  },
+  "bg_thread.py": {
+    "sha256": "b8b0e8fbbec3884e17e5467ab9a2006b2434f9e5aee332864f8aa512a12ce62d"
+  },
   "boot.py": {
-    "sha256": "4131718856f373442ce625dd409e15fc855f6da1b58f69ccfe3872d31245351e"
+    "sha256": "93423a769054314e2a390c51e860a916787f8babfd731b62889fc2753ba44270"
+  },
+  "console_log.py": {
+    "sha256": "3723ca355062403b3e1e9abc0a24ec5388f63efad278909f9c6e8caaedf40bbf"
+  },
+  "file_editor.py": {
+    "sha256": "2bf4f4264ffc76488df246634685c462a25fc2d5cf808fdc067e404306627bec"
+  },
+  "lcd_driver.py": {
+    "sha256": "12813b6e658897cbb2762a6573902c707ce3fcafb78bf686f74d455665abb58d"
   },
   "main.py": {
-    "sha256": "58cfcbb6eaa404e87ed9a3a246d215e9905628fb7db528e98110bdb1fe8f93f5"
+    "sha256": "442fb16990106b3dcfebbed6222c8d8f3b414adc26695a3d36670f7909762db4"
   },
   "netutil.py": {
     "sha256": "dc4e06fe3bf7d5df1cc5af63d05ee7ca8363e28a7b667f4e063bc473b67f652d"
   },
-  "user_code.default.py": {
-    "sha256": "c9573e422baa2001e44fd849b9726574cfd063298b0a92a3b53d17f4878aa49b"
+  "ota.py": {
+    "sha256": "6cdcef1fa18a57a2153d975cb3ae67077fee054adf21a04d52d9f0a7aa188143"
   },
-  "user_code.py": {
-    "sha256": "69ba22c2f23ba09b9fcdbfdfc86ad481abb3474eb4d238035089153311ae77e7"
+  "web_ui.py": {
+    "sha256": "a513b887e0ec9f387d5d00b731597ced30cb644e0c51a210fda46da74338beb5"
+  },
+  "wifi_manager.py": {
+    "sha256": "eb96a14dec6ba1e4faacb5a79fa840c1e50e530582113b3dd3eb29887c27996b"
   }
 }

@@ -14,9 +14,17 @@ import pathlib
 TRACKED_FILES = [
     "boot.py",
     "main.py",
+    "console_log.py",
+    "bg_thread.py",
+    "lcd_driver.py",
+    "wifi_manager.py",
+    "web_ui.py",
+    "file_editor.py",
+    "ota.py",
+    "app_manager.py",
     "netutil.py",
-    "user_code.py",
-    "user_code.default.py",
+    "app_reaction_game.py",
+    "app_dust_monitor.py",
 ]
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
