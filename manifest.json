@@ -27,7 +27,7 @@
     "sha256": "12813b6e658897cbb2762a6573902c707ce3fcafb78bf686f74d455665abb58d"
   },
   "main.py": {
-    "sha256": "442fb16990106b3dcfebbed6222c8d8f3b414adc26695a3d36670f7909762db4"
+    "sha256": "0e53c7c550c36d29b4f411c5c582ff9444fb3cdf21d50e01ba442fc61a4b7479"
   },
   "netutil.py": {
     "sha256": "dc4e06fe3bf7d5df1cc5af63d05ee7ca8363e28a7b667f4e063bc473b67f652d"
@@ -36,9 +36,9 @@
     "sha256": "66d9df175a616d810ac78364ffb2841a80833d625b85a3896bf19d1621d734e8"
   },
   "web_ui.py": {
-    "sha256": "a513b887e0ec9f387d5d00b731597ced30cb644e0c51a210fda46da74338beb5"
+    "sha256": "e60dc2d024e45a0b2d770f6ad94a4e6494cb54365a86ad49b5a5d2da0a104a9a"
   },
   "wifi_manager.py": {
-    "sha256": "eb96a14dec6ba1e4faacb5a79fa840c1e50e530582113b3dd3eb29887c27996b"
+    "sha256": "f6c112d7c8869e83bd97f21acf69bc4e9d6f173610b2955c9fcfa86a99afce8c"
   }
 }

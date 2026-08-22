@@ -22,16 +22,6 @@ def disable_wifi_power_save(wlan_obj):
         log_error("WiFi PowerSave", e)
 
 
-def set_custom_dns(wlan_obj, dns_ip="8.8.8.8"):
-    """DNS 서버(구글 DNS 8.8.8.8) 강제 지정으로 학교/공공 Wi-Fi 도메인 해석 보정"""
-    try:
-        ip, subnet, gateway, _ = wlan_obj.ifconfig()
-        wlan_obj.ifconfig((ip, subnet, gateway, dns_ip))
-        print(f"🌐 [DNS 설정 완료] IP: {ip}, DNS: {dns_ip}")
-    except Exception as e:
-        log_error("DNS 설정", e)
-
-
 def load_wifi_config():
     try:
         with open(CONFIG_FILE, "r") as f:
@@ -99,7 +89,6 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3)
         while t > 0:
             if sta.isconnected():
                 disable_wifi_power_save(sta)
-                set_custom_dns(sta, "8.8.8.8")
                 ip = sta.ifconfig()[0]
                 print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
                 if lcd_ref:
