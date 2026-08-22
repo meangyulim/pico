@@ -31,6 +31,31 @@ except ImportError:
     _THREADING_AVAILABLE = False
 
 # -----------------------------------------------------------------
+# 원격 콘솔용 로그 버퍼 — USB로 Thonny에 물려있지 않아도(Wi-Fi로만 붙어있어도)
+# print() 출력을 /logs 웹페이지에서 볼 수 있도록, builtins.print를 감싸서
+# 시리얼 출력은 그대로 두고 최근 N줄을 메모리에도 저장합니다.
+# 이 시점 이후의 print() 호출만 잡히므로, boot.py가 이 훅이 설치되기 전에
+# 찍는 아주 초기 로그(백업 복원 등)는 여기 안 남습니다.
+# -----------------------------------------------------------------
+import builtins
+
+LOG_BUFFER_MAX_LINES = 200
+_log_buffer = []
+_real_print = builtins.print
+
+def _tee_print(*args, **kwargs):
+    _real_print(*args, **kwargs)
+    try:
+        line = " ".join(str(a) for a in args)
+        _log_buffer.append(line)
+        if len(_log_buffer) > LOG_BUFFER_MAX_LINES:
+            del _log_buffer[0]
+    except Exception:
+        pass
+
+builtins.print = _tee_print
+
+# -----------------------------------------------------------------
 # [1] 시스템 설정 및 기본 상수
 # -----------------------------------------------------------------
 CONFIG_FILE = "wifi_config.json"
@@ -473,8 +498,9 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
         </form>
     </details>
 
-    <div style="margin-top: 14px; max-width: 380px; margin-left: auto; margin-right: auto;">
+    <div style="margin-top: 14px; max-width: 380px; margin-left: auto; margin-right: auto; display: flex; flex-direction: column; gap: 10px;">
         <a href="/edit" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📝 user_code.py 웹 에디터 열기</a>
+        <a href="/logs" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📜 실시간 로그 보기</a>
     </div>
 
     <script>
@@ -496,6 +522,52 @@ def generate_main_html(mode, current_ip, wifi_list, user_code_err, dust_val, vol
         }}
         setInterval(updateData, 2000);
         updateData();
+    </script>
+</body>
+</html>"""
+    return html
+
+
+def generate_logs_html():
+    html = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pico 원격 콘솔</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 12px; -webkit-text-size-adjust: 100%; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        h3 { font-size: 15px; color: #38bdf8; }
+        .back-btn { color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }
+        .note { font-size: 11px; color: #94a3b8; margin-bottom: 8px; }
+        #logBox { width: 100%; height: 75vh; background: #000; color: #4ade80; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5; border: 1px solid #334155; border-radius: 10px; padding: 10px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h3>📜 원격 콘솔 (최근 200줄)</h3>
+        <a href="/" class="back-btn">⬅ 메인으로</a>
+    </div>
+    <div class="note">Wi-Fi로만 연결돼 있어도 Thonny 시리얼 콘솔과 비슷하게 print() 출력을 볼 수 있습니다. 2초마다 자동 갱신됩니다.</div>
+    <div id="logBox">불러오는 중...</div>
+
+    <script>
+        const box = document.getElementById('logBox');
+        async function refreshLogs() {
+            try {
+                const res = await fetch('/logs.txt?t=' + Date.now());
+                if (res.ok) {
+                    const text = await res.text();
+                    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+                    box.textContent = text;
+                    if (atBottom) box.scrollTop = box.scrollHeight;
+                }
+            } catch (e) {}
+        }
+        setInterval(refreshLogs, 2000);
+        refreshLogs();
     </script>
 </body>
 </html>"""
@@ -1029,6 +1101,23 @@ def handle_client(conn, state):
         })
         resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + data_json
         conn.sendall(resp.encode('utf-8'))
+
+    # 1b) 원격 콘솔 로그 (텍스트, /logs 페이지가 주기적으로 가져감)
+    elif "GET /logs.txt" in first_line:
+        body = "\n".join(_log_buffer)
+        body_bytes = body.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: {len(body_bytes)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8'))
+        conn.sendall(body_bytes)
+
+    # 1c) 원격 콘솔 화면 (/logs) — Thonny 없이 Wi-Fi로만 붙어있어도 print() 로그를 봄
+    elif "GET /logs" in first_line:
+        logs_html = generate_logs_html()
+        resp_bytes = logs_html.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8'))
+        conn.sendall(resp_bytes)
+        gc.collect()
 
     # 2) 파비콘 즉시 종결
     elif "GET /favicon.ico" in first_line:
