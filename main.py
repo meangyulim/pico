@@ -624,8 +624,13 @@ def generate_file_list_html(files):
     return html
 
 
-def generate_editor_html(target_file, code_text, has_backup):
-    escaped_code = code_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+def generate_editor_html_head(target_file, has_backup):
+    """
+    에디터 페이지를 <textarea> 여는 태그까지만 만듭니다. 코드 본문은
+    handle_client가 따로 조각내어 이스케이프하며 스트리밍합니다 — main.py처럼
+    큰 파일(수십 KB)을 한 번에 문자열로 합치면 메모리 부담이 크고, 첫 바이트가
+    나가기까지 오래 걸려 느린 Wi-Fi에서 타임아웃에 걸리기 쉽기 때문입니다.
+    """
     if target_file == "main.py":
         safe_note = "🛡️ 이 파일이 깨지면 boot.py가 자동으로 이전 버전으로 복구합니다"
     else:
@@ -676,7 +681,13 @@ def generate_editor_html(target_file, code_text, has_backup):
     </div>
 
     <form action="/save_code?file={target_file}" method="POST" id="codeForm">
-        <textarea name="code" id="codeArea" spellcheck="false" required>{escaped_code}</textarea>
+        <textarea name="code" id="codeArea" spellcheck="false" required>"""
+    return html
+
+
+def generate_editor_html_tail(target_file):
+    """generate_editor_html_head()로 시작한 페이지를 </textarea>부터 마무리합니다."""
+    html = f"""</textarea>
         <button type="submit" class="btn-save" onclick="return confirm('{target_file}을(를) 저장하고 피코를 재부팅하시겠습니까?');">💾 저장 및 피코 재부팅</button>
     </form>
 
@@ -1150,11 +1161,21 @@ def handle_client(conn, state):
             except OSError:
                 has_backup = False
 
-            editor_html = generate_editor_html(target_file, code_text, has_backup)
-            resp_bytes = editor_html.encode('utf-8')
-            header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
+            # Content-Length를 미리 계산하려면 이스케이프된 전체 코드를 먼저
+            # 메모리에 만들어야 해서, 큰 파일(main.py 등)에서 메모리 부담과
+            # 첫 바이트 지연이 커집니다. 대신 길이 없이 Connection: close로
+            # 보내고, 코드 본문은 작은 조각 단위로 이스케이프하며 스트리밍합니다.
+            header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"
             conn.sendall(header.encode('utf-8'))
-            conn.sendall(resp_bytes)
+            conn.sendall(generate_editor_html_head(target_file, has_backup).encode('utf-8'))
+
+            CHUNK = 512
+            for i in range(0, len(code_text), CHUNK):
+                piece = code_text[i:i + CHUNK]
+                escaped = piece.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                conn.sendall(escaped.encode('utf-8'))
+
+            conn.sendall(generate_editor_html_tail(target_file).encode('utf-8'))
             gc.collect()
 
     # 4) 수정한 코드 저장 및 재부팅 (/save_code?file=<name> -> 해당 파일에 저장)
@@ -1419,9 +1440,11 @@ def serve_until_reconnect_needed(lcd, state):
             conn = None
             try:
                 conn, addr = server_socket.accept()
-                # main.py를 웹 에디터로 열면 파일 전체(수십 KB)를 보내야 해서
-                # 느린 Wi-Fi에서는 1초로는 부족할 수 있어 여유 있게 늘림.
-                conn.settimeout(5.0)
+                # main.py를 웹 에디터로 열면 파일 전체(수십 KB, 계속 커지는 중)를
+                # 보내야 해서 느린 Wi-Fi에서는 여유가 필요함. /edit는 이제
+                # 스트리밍으로 보내 첫 바이트는 훨씬 빨리 나가지만, 전체 전송이
+                # 끝나기까지는 여전히 이 시간 안에 들어와야 해서 넉넉히 잡음.
+                conn.settimeout(10.0)
                 wifi_saved = handle_client(conn, state)
                 conn.close()
                 if wifi_saved:
