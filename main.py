@@ -40,6 +40,7 @@ MAX_EDIT_FILE_SIZE = 64 * 1024  # 웹 에디터로 저장 가능한 파일 최�
 AP_SSID = "Pico-Dust-Setup"     # 피코 단독 핫스팟(AP) 이름
 AP_PASS = ""                    # 비밀번호 (빈칸 = 공개 오픈 AP)
 AP_IP = "192.168.4.1"
+AP_RETRY_INTERVAL_MS = 3 * 60 * 1000  # AP(오프라인) 모드에서 저장된 Wi-Fi를 재시도하는 주기
 
 # 웹 에디터의 파일 목록/편집 대상에서 제외하는 이름들.
 # boot.py는 부팅 안전망(boot.py 참고)이라 절대 웹으로 수정하지 않습니다.
@@ -220,7 +221,12 @@ def scan_nearby_wifis():
         log_error("WiFi 스캔", e)
         return []
 
-def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None):
+def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3):
+    """
+    저장된 SSID/비밀번호로 접속을 시도합니다. 신호가 순간적으로 불안정해서
+    첫 시도가 실패하는 경우가 흔해서, 포기하고 AP 모드로 넘어가기 전에
+    같은 정보로 여러 번(기본 3회) 재시도합니다.
+    """
     if not ssid:
         return False, None
 
@@ -228,34 +234,39 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None):
     ap.active(False)
 
     sta = network.WLAN(network.STA_IF)
-    sta.active(True)
-    disable_wifi_power_save(sta)
 
-    if password:
-        sta.connect(ssid, password)
-    else:
-        sta.connect(ssid)
+    for attempt in range(1, attempts + 1):
+        sta.active(False)
+        utime.sleep_ms(200)
+        sta.active(True)
+        disable_wifi_power_save(sta)
 
-    print(f"⏳ Wi-Fi [{ssid}] 접속 시도 중...")
-    if lcd_ref:
-        lcd_ref.display_2lines("Connecting WiFi", ssid[:16])
+        if password:
+            sta.connect(ssid, password)
+        else:
+            sta.connect(ssid)
 
-    t = timeout_sec
-    while t > 0:
-        feed_watchdog()
-        if sta.isconnected():
-            disable_wifi_power_save(sta)
-            set_custom_dns(sta, "8.8.8.8")
-            ip = sta.ifconfig()[0]
-            print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
-            if lcd_ref:
-                lcd_ref.display_2lines("WiFi Connected!", ip[:16])
-                utime.sleep(1.5)
-            return True, ip
-        utime.sleep(1)
-        t -= 1
+        print(f"⏳ Wi-Fi [{ssid}] 접속 시도 중... ({attempt}/{attempts})")
+        if lcd_ref:
+            lcd_ref.display_2lines(f"WiFi try {attempt}/{attempts}", ssid[:16])
 
-    print("❌ Wi-Fi 연결 실패 (신호 없음 또는 비밀번호 불일치)")
+        t = timeout_sec
+        while t > 0:
+            feed_watchdog()
+            if sta.isconnected():
+                disable_wifi_power_save(sta)
+                set_custom_dns(sta, "8.8.8.8")
+                ip = sta.ifconfig()[0]
+                print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
+                if lcd_ref:
+                    lcd_ref.display_2lines("WiFi Connected!", ip[:16])
+                    utime.sleep(1.5)
+                return True, ip
+            utime.sleep(1)
+            t -= 1
+
+        print(f"❌ Wi-Fi 연결 실패 (시도 {attempt}/{attempts})")
+
     return False, None
 
 def start_ap_mode(lcd_ref=None):
@@ -1139,6 +1150,7 @@ def serve_until_reconnect_needed(lcd, state):
 
     last_measure_time = utime.ticks_ms()
     last_cloud_sync_time = utime.ticks_ms() - sync_interval + 5000
+    last_ap_retry_time = utime.ticks_ms()
 
     try:
         while True:
@@ -1150,6 +1162,19 @@ def serve_until_reconnect_needed(lcd, state):
                 print("⚠️ 공유기 Wi-Fi 끊김 감지 -> 오프라인 AP 모드로 전환")
                 server_socket.close()
                 return
+
+            # A2. 오프라인 AP 모드에서도 저장된 Wi-Fi를 주기적으로 백그라운드
+            # 재시도. 비밀번호를 이미 올바르게 입력해뒀는데 공유기/신호 문제로
+            # 접속이 안 됐을 뿐이라면, 사용자가 다시 입력할 필요 없이 알아서
+            # 복구되도록 함. (연결 시도 중 잠깐 AP가 끊기는 건 감수)
+            if state.mode == "OFFLINE_AP":
+                if utime.ticks_diff(now, last_ap_retry_time) >= AP_RETRY_INTERVAL_MS:
+                    last_ap_retry_time = now
+                    saved_config = load_wifi_config()
+                    if saved_config and saved_config.get("ssid"):
+                        print("🔁 오프라인 AP 모드에서 저장된 Wi-Fi 재접속 시도...")
+                        server_socket.close()
+                        return
 
             # B. 주기적 센서 측정 & LCD & 버저
             if utime.ticks_diff(now, last_measure_time) >= meas_interval:
