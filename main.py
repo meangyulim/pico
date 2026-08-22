@@ -135,7 +135,8 @@ def handle_client(conn, state):
             "mute": is_mut,
             "thresh": th_val,
             "app_err": state.app_err,
-            "ota": get_ota_status_text()
+            "ota": get_ota_status_text(),
+            "mem_free": gc.mem_free()
         })
         resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + data_json
         conn.sendall(resp.encode('utf-8'))

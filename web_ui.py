@@ -63,6 +63,7 @@ def generate_main_html(mode, current_ip, wifi_list, app_err, value, volt_val, st
             • ☁️ 클라우드 동기화: <b id="cloudVal">{cloud_msg}</b><br>
             • 🔔 알림 제어 상태: <b id="controlVal">Mute: {is_muted_val} / 기준: {thresh_val:.0f}</b><br>
             • 🛰️ OTA 마지막 확인: <b id="otaVal">{ota_status}</b><br>
+            • 🧠 여유 메모리: <b id="memVal">-</b><br>
             • 기기 IP 주소: <b>{current_ip}</b>
         </div>
     </div>
@@ -99,6 +100,7 @@ def generate_main_html(mode, current_ip, wifi_list, app_err, value, volt_val, st
                     document.getElementById('cloudVal').innerText = d.cloud;
                     document.getElementById('controlVal').innerText = 'Mute: ' + d.mute + ' / 기준: ' + d.thresh;
                     document.getElementById('otaVal').innerText = d.ota;
+                    document.getElementById('memVal').innerText = (d.mem_free / 1024).toFixed(1) + ' KB';
                     const badge = document.getElementById('statusBadge');
                     badge.innerText = d.kor + ' (' + d.eng + ')';
                     badge.style.background = d.color;
