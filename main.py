@@ -1166,7 +1166,11 @@ def serve_until_reconnect_needed(lcd, state):
             conn = None
             try:
                 conn, addr = server_socket.accept()
-                conn.settimeout(1.0)
+                # main.py를 웹 에디터로 열면 파일 전체(수십 KB)를 보내야 해서
+                # 느린 Wi-Fi에서는 1초로는 부족할 수 있음. 8.3초 워치독 타임아웃보다
+                # 여유 있게 짧게 잡아서, 느린 클라이언트가 있어도 다음 루프의
+                # feed_watchdog() 전에 항상 끝나도록 함.
+                conn.settimeout(5.0)
                 wifi_saved = handle_client(conn, state)
                 conn.close()
                 if wifi_saved:
