@@ -20,8 +20,13 @@ except ImportError:
 
 from console_log import log_error
 from file_editor import file_hash, backup_file
+import watchdog
 
 OTA_ENABLED = True
+# 자동 주기 확인을 끄고, 대시보드의 "지금 업데이트 확인" 버튼을 눌렀을 때만
+# 확인/적용합니다. 47초마다 GitHub에 HTTPS로 붙던 걸 없애서 네트워크 활동이
+# 크게 줄고, 원인 미상의 먹통을 좁히는 데도 유리합니다.
+OTA_AUTO_CHECK = False
 OTA_REPO_RAW_BASE = "https://raw.githubusercontent.com/meangyulim/pico/main"
 OTA_MANIFEST_URL = OTA_REPO_RAW_BASE + "/manifest.json"
 OTA_CHECK_INTERVAL_MS = 47 * 1000  # 클라우드 동기화(60초)와 안 겹치게 60의 배수가 아닌 값을 씀
@@ -36,6 +41,7 @@ OTA_ALLOWED_TARGETS = {
     "boot.py", "main.py",
     "console_log.py", "bg_thread.py", "lcd_driver.py", "wifi_manager.py",
     "web_ui.py", "file_editor.py", "ota.py", "app_manager.py", "netutil.py",
+    "watchdog.py",
     "app_reaction_game.py", "app_dust_monitor.py", "app_idle.py",
 }
 
@@ -43,6 +49,8 @@ OTA_ALLOWED_TARGETS = {
 # 안 보고 있어도 브라우저로 확인할 수 있게 함.
 _last_check_ms = None
 _last_result = "확인 전"
+_manual_check_requested = False
+_check_in_progress = False
 
 # 실제로 파일이 바뀌어 적용된 마지막 시각/버전은 재부팅 후에도 남아있어야
 # 하므로(업데이트 적용 자체가 재부팅을 유발함) 파일에 저장합니다.
@@ -50,8 +58,10 @@ OTA_STATE_FILE = "ota_state.json"
 
 
 def get_ota_status_text():
+    if _check_in_progress:
+        return "확인 중..."
     if _last_check_ms is None:
-        return "확인 전"
+        return "수동 확인 대기 중" if not OTA_AUTO_CHECK else "확인 전"
     ago_sec = utime.ticks_diff(utime.ticks_ms(), _last_check_ms) // 1000
     ago_str = f"{ago_sec}초 전" if ago_sec < 60 else f"{ago_sec // 60}분 전"
     return f"{ago_str} - {_last_result}"
@@ -96,10 +106,12 @@ def get_last_update_text():
 
 
 def _run_ota_check():
-    global _last_check_ms, _last_result
+    global _last_check_ms, _last_result, _check_in_progress
     changed_any = False
     applied_names = []
+    _check_in_progress = True
     try:
+        watchdog.feed()
         res = urequests.get(OTA_MANIFEST_URL, timeout=OTA_REQUEST_TIMEOUT_SEC)
         try:
             manifest = res.json()
@@ -107,6 +119,7 @@ def _run_ota_check():
             res.close()
 
         for name, meta in manifest.items():
+            watchdog.feed()  # 파일이 여러 개면 전체가 8초를 넘길 수 있음
             if name not in OTA_ALLOWED_TARGETS:
                 continue  # manifest에 엉뚱한 이름이 있어도 무시 (안전장치)
             remote_hash_hex = meta.get("sha256", "")
@@ -122,6 +135,7 @@ def _run_ota_check():
                 content = res2.content
             finally:
                 res2.close()
+            watchdog.feed()
 
             if len(content) > OTA_MAX_FILE_SIZE:
                 print(f"⚠️ [OTA] {name} 크기가 너무 커서 건너뜁니다 ({len(content)} bytes)")
@@ -146,7 +160,9 @@ def _run_ota_check():
         _last_result = f"오류: {type(e).__name__}"
     finally:
         _last_check_ms = utime.ticks_ms()
+        _check_in_progress = False
         gc.collect()
+        watchdog.feed()
 
     if changed_any:
         _save_ota_state(manifest.get("_version"), applied_names)
@@ -156,10 +172,38 @@ def _run_ota_check():
 
 
 def trigger_ota_check():
-    """bg_thread의 영구 워커가 주기적으로 호출합니다 (register_periodic_task).
-    Wi-Fi가 연결돼 있지 않으면 조용히 건너뜁니다."""
+    """Wi-Fi가 연결돼 있지 않으면 조용히 건너뜁니다."""
+    global _last_result, _last_check_ms
     if not OTA_ENABLED:
         return
     if not network.WLAN(network.STA_IF).isconnected():
+        _last_result = "Wi-Fi 미연결로 건너뜀"
+        _last_check_ms = utime.ticks_ms()
         return
     _run_ota_check()
+
+
+def request_manual_check():
+    """웹에서 '지금 업데이트 확인'을 눌렀을 때 호출합니다. 여기서 바로
+    네트워크를 타면 웹 요청 응답이 수 초간 막히므로, 플래그만 세워두고
+    실제 확인은 core1의 백그라운드 워커가 집어가서 수행합니다."""
+    global _manual_check_requested
+    _manual_check_requested = True
+
+
+def poll_manual_ota_request():
+    """bg_thread 워커가 짧은 주기로 호출 — 요청이 들어와 있을 때만 실행."""
+    global _manual_check_requested
+    if OTA_AUTO_CHECK:
+        # 자동 모드로 되돌린 경우: 이 함수는 짧은 주기로 불리므로, 여기서
+        # OTA_CHECK_INTERVAL_MS를 직접 지켜야 매번 확인하지 않습니다.
+        if _last_check_ms is not None and \
+                utime.ticks_diff(utime.ticks_ms(), _last_check_ms) < OTA_CHECK_INTERVAL_MS:
+            return
+        trigger_ota_check()
+        return
+    if not _manual_check_requested:
+        return
+    _manual_check_requested = False
+    print("🛰️ [OTA] 수동 업데이트 확인 요청됨")
+    trigger_ota_check()

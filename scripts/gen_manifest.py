@@ -23,6 +23,7 @@ TRACKED_FILES = [
     "ota.py",
     "app_manager.py",
     "netutil.py",
+    "watchdog.py",
     "app_reaction_game.py",
     "app_dust_monitor.py",
     "app_idle.py",

@@ -18,7 +18,7 @@ import os
 CORE_FILES = (
     "main.py", "console_log.py", "bg_thread.py", "lcd_driver.py",
     "wifi_manager.py", "web_ui.py", "file_editor.py", "ota.py",
-    "app_manager.py", "netutil.py",
+    "app_manager.py", "netutil.py", "watchdog.py",
 )
 
 

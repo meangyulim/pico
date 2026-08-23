@@ -86,9 +86,11 @@ def generate_main_html(mode, current_ip, wifi_list, app_err, value, volt_val, st
     </details>
 
     <div style="margin-top: 14px; max-width: 380px; margin-left: auto; margin-right: auto; display: flex; flex-direction: column; gap: 10px;">
+        <a href="/ota/check" style="display: block; text-decoration: none; padding: 12px; background: #0284c7; border: 1px solid #0369a1; border-radius: 12px; color: #fff; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">🛰️ 지금 업데이트 확인</a>
         <a href="/apps" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">🔌 앱 전환</a>
         <a href="/edit" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📝 웹 에디터 열기</a>
         <a href="/logs" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📜 실시간 로그 보기</a>
+        <a href="/power" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">⚡ 전원 관리</a>
     </div>
 
     <script>
@@ -393,6 +395,83 @@ def generate_app_list_html(apps, active_name):
 
     <div class="app-list">
         {rows}
+    </div>
+</body>
+</html>"""
+    return html
+
+
+def generate_power_html(power_mode, uptime_sec, cpu_mhz, wdt_active):
+    """전원 관리 화면 — 컴퓨터의 전원 옵션처럼 다시 시작/절전/종료를 제공합니다."""
+    hours = uptime_sec // 3600
+    minutes = (uptime_sec % 3600) // 60
+    uptime_str = f"{hours}시간 {minutes}분" if hours else f"{minutes}분"
+    is_sleeping = (power_mode == "SLEEP")
+    wdt_str = "켜짐 (먹통 시 자동 재부팅)" if wdt_active else "꺼짐"
+
+    if is_sleeping:
+        sleep_card = """
+        <a href="/power/wake" class="p-row wake">
+            <div class="p-title">☀️ 절전 해제</div>
+            <div class="p-desc">화면과 센서 측정을 다시 켭니다.</div>
+        </a>"""
+    else:
+        sleep_card = """
+        <a href="/power/sleep" class="p-row" onclick="return confirm('절전 모드로 전환할까요?\\n화면이 꺼지고 센서 측정이 멈춥니다. 웹으로 다시 켤 수 있습니다.');">
+            <div class="p-title">🌙 절전 모드</div>
+            <div class="p-desc">LCD와 센서 측정을 끕니다. Wi-Fi/웹서버는 살아있어 이 화면에서 다시 켤 수 있습니다.</div>
+        </a>"""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pico 전원 관리</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; -webkit-text-size-adjust: 100%; }}
+        h3 {{ font-size: 16px; color: #38bdf8; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
+        .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
+        .status {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; font-size: 13px; color: #94a3b8; line-height: 1.8; margin-bottom: 14px; }}
+        .status b {{ color: #f1f5f9; }}
+        .p-list {{ display: flex; flex-direction: column; gap: 10px; }}
+        .p-row {{ display: block; padding: 14px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #f1f5f9; text-decoration: none; }}
+        .p-row:active {{ background: #334155; }}
+        .p-title {{ font-size: 15px; font-weight: bold; margin-bottom: 4px; }}
+        .p-desc {{ font-size: 12px; color: #94a3b8; line-height: 1.5; }}
+        .p-row.wake {{ border-color: #eab308; }}
+        .p-row.wake .p-title {{ color: #fde047; }}
+        .p-row.reboot {{ border-color: #38bdf8; }}
+        .p-row.reboot .p-title {{ color: #7dd3fc; }}
+        .p-row.halt {{ border-color: #ef4444; }}
+        .p-row.halt .p-title {{ color: #fca5a5; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h3>⚡ 전원 관리</h3>
+        <a href="/" class="back-btn">⬅ 메인으로</a>
+    </div>
+
+    <div class="status">
+        • 현재 상태: <b>{'절전 중' if is_sleeping else '정상 작동'}</b><br>
+        • 가동 시간: <b>{uptime_str}</b><br>
+        • CPU 클럭: <b>{cpu_mhz} MHz</b><br>
+        • 워치독: <b>{wdt_str}</b>
+    </div>
+
+    <div class="p-list">
+        <a href="/power/reboot" class="p-row reboot" onclick="return confirm('지금 다시 시작할까요?');">
+            <div class="p-title">🔄 다시 시작</div>
+            <div class="p-desc">즉시 재부팅합니다. 약 20~30초 후 다시 접속할 수 있습니다.</div>
+        </a>
+{sleep_card}
+        <a href="/power/halt" class="p-row halt" onclick="return confirm('시스템을 종료할까요?\\n\\n웹서버가 꺼져서 이 화면으로는 다시 켤 수 없습니다.\\n전원을 뽑았다 다시 꽂아야 복구됩니다.');">
+            <div class="p-title">⏻ 시스템 종료</div>
+            <div class="p-desc">화면·웹서버·센서를 모두 정지시켜 전원을 뽑아도 안전한 상태로 둡니다. <b style="color:#fca5a5;">복구하려면 전원을 다시 인가해야 합니다.</b></div>
+        </a>
     </div>
 </body>
 </html>"""
