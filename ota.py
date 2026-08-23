@@ -20,7 +20,14 @@ except ImportError:
 
 from console_log import log_error
 from file_editor import file_hash, backup_file
-import watchdog
+
+try:
+    import watchdog
+except ImportError:  # OTA로 아직 전달되지 않은 새 모듈 — 없어도 동작해야 함
+    class watchdog:
+        @staticmethod
+        def feed():
+            pass
 
 OTA_ENABLED = True
 # 자동 주기 확인을 끄고, 대시보드의 "지금 업데이트 확인" 버튼을 눌렀을 때만
@@ -35,15 +42,39 @@ OTA_REQUEST_TIMEOUT_SEC = 10  # urequests는 기본 타임아웃이 없어서, �
 # 응답을 영영 안 주면 이 스레드가 무한정 멈춰버릴 수 있음 (심하면 GC의
 # "두 코어 동시 정지"에 걸려 메인 루프까지 같이 얼어붙을 수 있음)
 
-# active_app.json/wifi_config.json 같은 기기별 로컬 설정은 일부러 뺐습니다
-# (리포 상태로 덮어쓰면 각 기기가 고른 앱/Wi-Fi가 매번 초기화되므로).
-OTA_ALLOWED_TARGETS = {
-    "boot.py", "main.py",
-    "console_log.py", "bg_thread.py", "lcd_driver.py", "wifi_manager.py",
-    "web_ui.py", "file_editor.py", "ota.py", "app_manager.py", "netutil.py",
-    "watchdog.py",
-    "app_reaction_game.py", "app_dust_monitor.py", "app_idle.py",
+# 기기별 로컬 설정/로그는 리포 상태로 덮어쓰면 안 됩니다 (각 기기가 고른
+# 앱/Wi-Fi가 매번 초기화되므로). 애초에 manifest에 실리지도 않지만,
+# 이중 안전장치로 여기서도 막습니다.
+OTA_PROTECTED_FILES = {
+    "wifi_config.json", "active_app.json", "ota_state.json",
+    "debug.log", "debug_prev.log",
 }
+
+
+def _is_ota_target(name):
+    """
+    manifest에 실린 이름이 실제로 받아올 대상인지 판정합니다.
+
+    예전에는 허용 파일명을 집합(OTA_ALLOWED_TARGETS)에 하드코딩했는데,
+    그러면 "새로 추가된 모듈"은 영영 전달되지 못하는 부트스트랩 문제가
+    있었습니다 — 판정을 하는 주체가 기기에 이미 깔려 있는 '구버전'
+    ota.py라서, 새 파일 이름을 알 리가 없기 때문입니다. 실제로
+    watchdog.py를 도입할 때 이 문제가 터졌습니다: main.py 등은 새
+    버전으로 갱신됐는데 watchdog.py만 목록에 없어 안 와서, 재부팅 후
+    ImportError -> boot.py가 핵심 모듈을 전부 .bak으로 롤백 -> 구버전
+    복귀가 반복됐습니다.
+
+    그래서 이제는 이름을 나열하는 대신 구조로 판정합니다. manifest 자체가
+    우리 리포에서 HTTPS로 받아온 것이고 파일마다 sha256을 재검증하므로,
+    목록을 따로 유지해서 얻는 실익도 크지 않았습니다.
+    """
+    if not name or name.startswith("_"):
+        return False  # manifest의 메타데이터(_version 등)
+    if "/" in name or "\\" in name or ".." in name:
+        return False  # 경로 탈출 방지 — 항상 최상위 파일명만 허용
+    if name in OTA_PROTECTED_FILES:
+        return False
+    return name.endswith(".py")
 
 # 웹 대시보드에 "OTA 마지막 확인" 상태를 보여주기 위한 값. 콘솔(Thonny)을
 # 안 보고 있어도 브라우저로 확인할 수 있게 함.
@@ -120,7 +151,10 @@ def _run_ota_check():
 
         for name, meta in manifest.items():
             watchdog.feed()  # 파일이 여러 개면 전체가 8초를 넘길 수 있음
-            if name not in OTA_ALLOWED_TARGETS:
+            # 한 번에 여러 파일을 받으면 파일 내용 + TLS 버퍼가 겹쳐
+            # ENOMEM이 날 수 있어, 파일마다 회수하고 시작합니다.
+            gc.collect()
+            if not _is_ota_target(name):
                 continue  # manifest에 엉뚱한 이름이 있어도 무시 (안전장치)
             remote_hash_hex = meta.get("sha256", "")
             if not remote_hash_hex:

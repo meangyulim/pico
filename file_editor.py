@@ -9,7 +9,14 @@ except ImportError:
     import hashlib
 
 from console_log import log_error
-import watchdog
+
+try:
+    import watchdog
+except ImportError:  # OTA로 아직 전달되지 않은 새 모듈 — 없어도 동작해야 함
+    class watchdog:
+        @staticmethod
+        def feed():
+            pass
 
 MAX_EDIT_FILE_SIZE = 64 * 1024  # 웹 에디터로 저장 가능한 파일 최대 크기 (64KB)
 

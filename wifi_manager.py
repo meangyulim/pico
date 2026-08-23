@@ -6,7 +6,14 @@ import network
 import utime
 
 from console_log import log_error
-import watchdog
+
+try:
+    import watchdog
+except ImportError:  # OTA로 아직 전달되지 않은 새 모듈 — 없어도 동작해야 함
+    class watchdog:
+        @staticmethod
+        def feed():
+            pass
 
 CONFIG_FILE = "wifi_config.json"
 AP_SSID = "Pico-Dust-Setup"     # 피코 단독 핫스팟(AP) 이름

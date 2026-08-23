@@ -27,7 +27,27 @@ import utime
 from netutil import url_decode
 from bg_thread import register_periodic_task, start_background_worker
 from lcd_driver import I2cLcd
-import watchdog
+
+try:
+    import watchdog
+except ImportError:
+    # OTA로 아직 전달되지 않은 새 모듈일 수 있습니다. 여기서 죽으면
+    # boot.py가 핵심 모듈을 전부 .bak으로 되돌려버려서, 정작 그 모듈을
+    # 받아올 기회조차 영영 사라집니다 (실제로 watchdog.py 도입 때 발생).
+    # 그래서 없으면 없는 대로 부팅하고, 다음 업데이트에서 받아옵니다.
+    class watchdog:
+        @staticmethod
+        def start():
+            print("⚠️ watchdog.py가 아직 없습니다 — 워치독 없이 실행합니다 "
+                  "(대시보드에서 '지금 업데이트 확인'을 눌러 받아오세요)")
+
+        @staticmethod
+        def feed():
+            pass
+
+        @staticmethod
+        def is_active():
+            return False
 from wifi_manager import (
     load_wifi_config, save_wifi_config, scan_nearby_wifis,
     connect_sta_wifi, start_ap_mode, AP_RETRY_INTERVAL_MS,
