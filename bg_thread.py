@@ -1,7 +1,18 @@
 # =================================================================
-# bg_thread.py : RP2040/RP2350 보조 코어(core1) 하나를 여러 백그라운드
-# 작업(클라우드 동기화, OTA 확인 등)이 공유해서 쓰기 위한 조율 도구
+# bg_thread.py : RP2040/RP2350 보조 코어(core1)에서 도는 영구 백그라운드
+# 워커 — 클라우드 동기화, OTA 확인 등 주기적 작업을 전담
 # =================================================================
+# 예전에는 작업 주기(예: OTA 확인 47초)마다 매번 새 스레드를 만들고
+# 버리는 방식이었는데, 이게 core1 상태를 조금씩 갉아먹는 것으로 보였습니다
+# (관찰된 증상: 시간이 지날수록 여유 메모리가 꾸준히 줄어들다가, 드물게는
+# 새 스레드 생성 자체가 응답 없이 멈춰버림 — 메인 루프가 스레드 생성을
+# 동기적으로 기다리는 구조라 이 경우 메인 루프까지 통째로 멈춥니다).
+#
+# 그래서 지금은 부팅 시 딱 한 번만 백그라운드 스레드를 띄우고, 그 안에서
+# 영구히 도는 루프가 등록된 작업들의 타이밍을 자체적으로 체크해서
+# 순서대로 실행합니다. 스레드 생성/해제 자체가 아예 없어지고, 작업들이
+# 같은 스레드 안에서 순차 실행되니 서로 겹칠 일도 없어(잠금 장치 불필요)
+# 예전에 있었던 "OSError: core1 in use" 문제도 원천적으로 사라집니다.
 import utime
 
 from console_log import log_error
@@ -12,72 +23,47 @@ try:
 except ImportError:
     THREADING_AVAILABLE = False
 
-_lock = _thread.allocate_lock() if THREADING_AVAILABLE else None
-_busy = False
+_WORKER_POLL_MS = 500
+_tasks = []
+_worker_started = False
 
 
-def _try_acquire():
-    global _busy
-    if not THREADING_AVAILABLE:
-        return True
-    _lock.acquire()
-    already = _busy
-    if not already:
-        _busy = True
-    _lock.release()
-    return not already
-
-
-def _release():
-    global _busy
-    if _lock:
-        _lock.acquire()
-    _busy = False
-    if _lock:
-        _lock.release()
-
-
-def _start(fn, args):
+def register_periodic_task(name, fn, interval_ms):
     """
-    _thread.start_new_thread()을 시작합니다. RP2040/RP2350은 이전 스레드가
-    끝나서 busy 플래그가 지워진 직후에도, 실제 core1이 완전히 해제되기까지
-    아주 짧은 지연이 있어 곧바로 새 스레드를 시작하면 "OSError: core1 in use"가
-    날 수 있습니다. 그래서 실패하면 잠깐 쉬었다가 몇 번 더 시도합니다.
+    core1 워커가 주기적으로 실행할 작업을 등록합니다. main()에서 부팅 시
+    한 번만 등록하세요. fn은 인자 없이 호출되며, 필요한 상태는 클로저로
+    캡처하고 (예: Wi-Fi 연결 여부 등) 스스로 판단해서 조용히 건너뛰어야
+    합니다. fn에서 발생한 예외는 여기서 잡아 로그만 남기고 워커는 계속
+    돕니다 (한 작업의 오류가 다른 작업/워커 자체를 죽이지 않음).
     """
-    delays_ms = (0, 50, 150, 400)
-    last_err = None
-    for delay_ms in delays_ms:
-        if delay_ms:
-            utime.sleep_ms(delay_ms)
-        try:
-            _thread.start_new_thread(fn, args)
-            return True
-        except OSError as e:
-            last_err = e
-    log_error("백그라운드 스레드 시작", last_err)
-    return False
+    _tasks.append({
+        "name": name, "fn": fn, "interval_ms": interval_ms,
+        "last_run": utime.ticks_ms(),
+    })
 
 
-def run_exclusive(fn, args, busy_message):
+def _worker_loop():
+    while True:
+        now = utime.ticks_ms()
+        for task in _tasks:
+            if utime.ticks_diff(now, task["last_run"]) >= task["interval_ms"]:
+                task["last_run"] = now
+                try:
+                    task["fn"]()
+                except Exception as e:
+                    log_error(f"백그라운드 작업({task['name']})", e)
+        utime.sleep_ms(_WORKER_POLL_MS)
+
+
+def start_background_worker():
     """
-    core1을 다른 작업이 안 쓰고 있으면 fn(*args)를 스레드로 실행하고, 끝나면
-    자동으로 점유를 해제합니다. 이미 다른 작업이 쓰고 있으면 busy_message를
-    출력하고 조용히 건너뜁니다. _thread를 쓸 수 없는 빌드에서는 동기 호출로
-    자동 폴백합니다.
+    main()에서 부팅 시 딱 한 번만 호출하세요 (등록된 작업이 다 끝난 뒤).
+    _thread를 쓸 수 없는 빌드에서는 아무것도 하지 않습니다 — 이 경우
+    등록된 작업들은 실행되지 않습니다 (메인 루프를 막지 않으려고 애초에
+    별도 코어로 뺀 것이므로, 동기 폴백은 지원하지 않음).
     """
-    if not THREADING_AVAILABLE:
-        fn(*args)
+    global _worker_started
+    if _worker_started or not THREADING_AVAILABLE:
         return
-
-    if not _try_acquire():
-        print(busy_message)
-        return
-
-    def _wrapped(*a):
-        try:
-            fn(*a)
-        finally:
-            _release()
-
-    if not _start(_wrapped, args):
-        _release()
+    _worker_started = True
+    _thread.start_new_thread(_worker_loop, ())

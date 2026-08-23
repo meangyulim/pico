@@ -9,6 +9,7 @@
 import gc
 import json
 import machine
+import network
 import urequests
 import utime
 
@@ -18,7 +19,6 @@ except ImportError:
     import hashlib
 
 from console_log import log_error
-from bg_thread import run_exclusive
 from file_editor import file_hash, backup_file
 
 OTA_ENABLED = True
@@ -156,9 +156,10 @@ def _run_ota_check():
 
 
 def trigger_ota_check():
+    """bg_thread의 영구 워커가 주기적으로 호출합니다 (register_periodic_task).
+    Wi-Fi가 연결돼 있지 않으면 조용히 건너뜁니다."""
     if not OTA_ENABLED:
         return
-    run_exclusive(
-        _run_ota_check, (),
-        "⏭️ 다른 백그라운드 작업(클라우드 동기화 등)이 core1에서 진행 중이라 이번 OTA 확인 주기는 건너뜁니다."
-    )
+    if not network.WLAN(network.STA_IF).isconnected():
+        return
+    _run_ota_check()
