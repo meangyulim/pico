@@ -25,7 +25,7 @@ import os
 import utime
 
 from netutil import url_decode
-from bg_thread import run_exclusive
+from bg_thread import register_periodic_task, start_background_worker
 from lcd_driver import I2cLcd
 from wifi_manager import (
     load_wifi_config, save_wifi_config, scan_nearby_wifis,
@@ -44,22 +44,6 @@ from app_manager import (
 )
 
 HEARTBEAT_INTERVAL_MS = 30 * 1000
-
-
-def _run_cloud_sync(app_mod, value, voltage, status_eng):
-    try:
-        app_mod.sync_with_google_sheets(value, voltage, status_eng)
-    except Exception as e:
-        log_error("클라우드 동기화", e)
-
-
-def trigger_cloud_sync(app_mod, value, voltage, status_eng):
-    if not (app_mod and hasattr(app_mod, 'sync_with_google_sheets')):
-        return
-    run_exclusive(
-        _run_cloud_sync, (app_mod, value, voltage, status_eng),
-        "⏭️ 다른 백그라운드 작업(OTA 확인 등)이 core1에서 진행 중이라 이번 클라우드 동기화 주기는 건너뜁니다."
-    )
 
 
 # -----------------------------------------------------------------
@@ -435,12 +419,9 @@ def serve_until_reconnect_needed(lcd, state):
 
     app_mod = state.app_mod
     meas_interval = getattr(app_mod, "DISPLAY_UPDATE_INTERVAL_MS", 2000) if app_mod else 2000
-    sync_interval = getattr(app_mod, "CLOUD_SYNC_INTERVAL_MS", 60000) if app_mod else 60000
 
     last_measure_time = utime.ticks_ms()
-    last_cloud_sync_time = utime.ticks_ms() - sync_interval + 5000
     last_ap_retry_time = utime.ticks_ms()
-    last_ota_check_time = utime.ticks_ms() - OTA_CHECK_INTERVAL_MS + 10000
     last_heartbeat_time = utime.ticks_ms()
 
     try:
@@ -471,17 +452,10 @@ def serve_until_reconnect_needed(lcd, state):
                 last_measure_time = now
                 display_toggle = measure_and_update_lcd(lcd, state, display_toggle)
 
-            # C. 주기적 클라우드 동기화 (별도 코어에서 실행, 메인 루프는 멈추지 않음)
-            if state.mode == "ONLINE_STA" and wlan_sta.isconnected():
-                if utime.ticks_diff(now, last_cloud_sync_time) >= sync_interval:
-                    last_cloud_sync_time = now
-                    trigger_cloud_sync(state.app_mod, state.value, state.avg_v, state.status_eng)
-
-            # C2. 주기적 OTA 확인 (GitHub manifest.json 폴링, 별도 코어에서 실행)
-            if state.mode == "ONLINE_STA" and wlan_sta.isconnected():
-                if utime.ticks_diff(now, last_ota_check_time) >= OTA_CHECK_INTERVAL_MS:
-                    last_ota_check_time = now
-                    trigger_ota_check()
+            # 클라우드 동기화/OTA 확인은 이제 bg_thread의 영구 백그라운드
+            # 워커(core1)가 자체 타이밍으로 주기적으로 실행합니다
+            # (main()에서 register_periodic_task로 한 번만 등록) — 메인
+            # 루프는 그쪽 타이밍을 몰라도 됨.
 
             # C3. 주기적 하트비트 로그 + 파일 저장 (기기가 완전히 먹통이 돼서
             # 웹서버로 /logs를 못 보게 되더라도, 재부팅 후 웹 에디터로
@@ -528,6 +502,23 @@ def serve_until_reconnect_needed(lcd, state):
         utime.sleep(1)
 
 
+def _make_cloud_sync_task(state):
+    """state를 클로저로 캡처해서, 호출될 때마다 그 시점의 최신 측정값으로
+    동기화하는 무인자 함수를 만듭니다 (register_periodic_task는 무인자
+    함수만 받음)."""
+    def _cloud_sync_task():
+        app_mod = state.app_mod
+        if not (app_mod and hasattr(app_mod, 'sync_with_google_sheets')):
+            return
+        if state.mode != "ONLINE_STA" or not network.WLAN(network.STA_IF).isconnected():
+            return
+        try:
+            app_mod.sync_with_google_sheets(state.value, state.avg_v, state.status_eng)
+        except Exception as e:
+            log_error("클라우드 동기화", e)
+    return _cloud_sync_task
+
+
 def main():
     print("==========================================")
     print(" 🛡️ Pico Core System 가동")
@@ -539,6 +530,11 @@ def main():
     state = LoopState()
     state.app_mod = app_mod
     state.app_err = app_err
+
+    sync_interval = getattr(app_mod, "CLOUD_SYNC_INTERVAL_MS", 60000) if app_mod else 60000
+    register_periodic_task("cloud_sync", _make_cloud_sync_task(state), sync_interval)
+    register_periodic_task("ota_check", trigger_ota_check, OTA_CHECK_INTERVAL_MS)
+    start_background_worker()
 
     while True:
         connect_network(lcd, state)

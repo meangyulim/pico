@@ -1,5 +1,5 @@
 {
-  "_version": "06d5d6a6dd1b",
+  "_version": "065bdd321231",
   "app_dust_monitor.py": {
     "sha256": "c9657db7a058ce63d0d732a6b4c52b2b75a4f385fefa444b9fb8a36da6589a99"
   },
@@ -13,7 +13,7 @@
     "sha256": "95e28ba6c8a92355842a14ee5a284998a1c4e1e5c32b0626e5fe0b3e96bc4905"
   },
   "bg_thread.py": {
-    "sha256": "b8b0e8fbbec3884e17e5467ab9a2006b2434f9e5aee332864f8aa512a12ce62d"
+    "sha256": "189cbe6e2429280d72163d4a012afe054654157ba89c94734ce7692e7b7362de"
   },
   "boot.py": {
     "sha256": "0fcdba6f0bd740cb85cf54a1ee4bb04df275a65691853f385d305446ab807959"
@@ -28,13 +28,13 @@
     "sha256": "12813b6e658897cbb2762a6573902c707ce3fcafb78bf686f74d455665abb58d"
   },
   "main.py": {
-    "sha256": "e0f874ea9c014cbf742da01e81400c7b27e65ecfc5c3bbc281c06703d21f1377"
+    "sha256": "407da3295cd3a8effa79e50435eabc6ee2ee3a6bc6585a29ef6b88e534ae69dc"
   },
   "netutil.py": {
     "sha256": "3101adf9186828e2171dd21b88972b2103f4f1fa3cac1dbe19325f60272bd285"
   },
   "ota.py": {
-    "sha256": "0a0208fc623d2f566194d238000bf4ae6b663db49dad76a7fbba96a437976578"
+    "sha256": "21f968f6cf103fc18162d985c66b3a9936171c385e90174e668a48d3a1fc0fa7"
   },
   "web_ui.py": {
     "sha256": "3b937e3158422f90f3803bf2bef8c382977896a5d48d679641a3e3cb176776f0"
