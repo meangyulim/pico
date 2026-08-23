@@ -467,28 +467,44 @@ def serve_until_reconnect_needed(lcd, state):
                 flush_log_to_file()
 
             # D. 웹 요청 수신 및 즉각 처리
+            # accept() 자체의 OSError(대기 중 연결 없음 — settimeout(0.02)
+            # 때문에 대부분의 루프에서 정상적으로 발생함)와, 연결을 실제로
+            # 받은 뒤 처리 중 발생하는 오류를 분리해서 다룹니다. 예전엔 이
+            # 둘을 같은 except OSError로 묶어서 처리하다가, handle_client()
+            # 도중 OSError(클라이언트가 중간에 끊는 등, Wi-Fi 폴링이 잦을수록
+            # 흔함)가 나면 conn.close()를 건너뛰어 소켓이 계속 새는 버그가
+            # 있었습니다 — 대시보드를 열어두면(2초마다 폴링) 훨씬 빨리
+            # 누적돼서 결국 소켓 풀이 고갈되면 accept() 자체가 멈춰버릴
+            # 수 있습니다(메인 루프 전체 먹통, 여유 힙 메모리와는 무관).
             conn = None
             try:
                 conn, addr = server_socket.accept()
-                # main.py를 웹 에디터로 열면 파일 전체(수십 KB)를 보내야 해서
-                # 느린 Wi-Fi에서는 여유가 필요함. /edit는 이제 스트리밍으로
-                # 보내 첫 바이트는 훨씬 빨리 나가지만, 전체 전송이 끝나기까지는
-                # 여전히 이 시간 안에 들어와야 해서 넉넉히 잡음.
-                conn.settimeout(10.0)
-                wifi_saved = handle_client(conn, state)
-                conn.close()
-                if wifi_saved:
-                    server_socket.close()
-                    return
             except OSError:
-                pass
-            except Exception as e:
-                log_error("클라이언트 처리", e)
-                if conn:
+                conn = None
+
+            if conn is not None:
+                wifi_saved = False
+                try:
+                    # main.py를 웹 에디터로 열면 파일 전체(수십 KB)를 보내야
+                    # 해서 느린 Wi-Fi에서는 여유가 필요함. /edit는 이제
+                    # 스트리밍으로 보내 첫 바이트는 훨씬 빨리 나가지만, 전체
+                    # 전송이 끝나기까지는 여전히 이 시간 안에 들어와야 해서
+                    # 넉넉히 잡음.
+                    conn.settimeout(10.0)
+                    wifi_saved = handle_client(conn, state)
+                except OSError:
+                    pass
+                except Exception as e:
+                    log_error("클라이언트 처리", e)
+                finally:
                     try:
                         conn.close()
                     except Exception:
                         pass
+
+                if wifi_saved:
+                    server_socket.close()
+                    return
 
             gc.collect()
             utime.sleep_ms(10)
