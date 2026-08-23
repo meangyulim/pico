@@ -1,6 +1,7 @@
 wifi_config.json
 active_app.json
 user_code_tmp.py
+debug.log
 __pycache__/
 *.pyc
 .pytest_cache/

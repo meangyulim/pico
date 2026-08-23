@@ -14,7 +14,7 @@
 
 # console_log를 가장 먼저 import해야 이 시점 이후의 모든 print() 호출
 # (다른 모듈 것까지)이 원격 콘솔(/logs) 버퍼에 잡힙니다.
-from console_log import log_error, log_buffer
+from console_log import log_error, log_buffer, flush_log_to_file
 
 import machine
 import network
@@ -42,6 +42,8 @@ from ota import OTA_CHECK_INTERVAL_MS, trigger_ota_check, get_ota_status_text
 from app_manager import (
     load_active_app, list_available_apps, get_active_app_name, set_active_app_name,
 )
+
+HEARTBEAT_INTERVAL_MS = 30 * 1000
 
 
 def _run_cloud_sync(app_mod, value, voltage, status_eng):
@@ -437,6 +439,7 @@ def serve_until_reconnect_needed(lcd, state):
     last_cloud_sync_time = utime.ticks_ms() - sync_interval + 5000
     last_ap_retry_time = utime.ticks_ms()
     last_ota_check_time = utime.ticks_ms() - OTA_CHECK_INTERVAL_MS + 10000
+    last_heartbeat_time = utime.ticks_ms()
 
     try:
         while True:
@@ -477,6 +480,15 @@ def serve_until_reconnect_needed(lcd, state):
                 if utime.ticks_diff(now, last_ota_check_time) >= OTA_CHECK_INTERVAL_MS:
                     last_ota_check_time = now
                     trigger_ota_check()
+
+            # C3. 주기적 하트비트 로그 + 파일 저장 (기기가 완전히 먹통이 돼서
+            # 웹서버로 /logs를 못 보게 되더라도, 재부팅 후 웹 에디터로
+            # debug.log를 열어 먹통 직전 상태(여유 메모리, Wi-Fi 연결 여부)를
+            # 확인할 수 있게 함)
+            if utime.ticks_diff(now, last_heartbeat_time) >= HEARTBEAT_INTERVAL_MS:
+                last_heartbeat_time = now
+                print(f"💓 [heartbeat] mem_free={gc.mem_free()} wifi={wlan_sta.isconnected()}")
+                flush_log_to_file()
 
             # D. 웹 요청 수신 및 즉각 처리
             conn = None
