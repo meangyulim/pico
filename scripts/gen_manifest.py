@@ -33,12 +33,24 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def main():
     manifest = {}
+    file_hashes = {}
     for name in TRACKED_FILES:
         data = (ROOT / name).read_bytes()
-        manifest[name] = {"sha256": hashlib.sha256(data).hexdigest()}
+        digest = hashlib.sha256(data).hexdigest()
+        manifest[name] = {"sha256": digest}
+        file_hashes[name] = digest
+
+    # 추적 파일들의 해시를 합쳐서 만든 결정론적 "버전" 식별자. git 커밋
+    # SHA를 쓰면 매니페스트를 생성하는 시점엔 아직 이 커밋이 존재하지
+    # 않아 한 커밋 어긋나는 문제가 있고, 생성 시각(now)을 쓰면 CI가
+    # 재생성했을 때 항상 다른 값이 나와 "manifest.json이 최신인지"
+    # 검사(diff)가 매번 실패합니다. 파일 내용만의 함수라 둘 다 안전합니다.
+    combined = json.dumps(file_hashes, sort_keys=True).encode()
+    manifest["_version"] = hashlib.sha256(combined).hexdigest()[:12]
+
     out_path = ROOT / "manifest.json"
     out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    print(f"Wrote {out_path} ({len(manifest)} files)")
+    print(f"Wrote {out_path} ({len(TRACKED_FILES)} files, version {manifest['_version']})")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 # 모듈이 바뀌면 재부팅해서 boot.py의 안전망을 그대로 거칩니다.
 # =================================================================
 import gc
+import json
 import machine
 import urequests
 import utime
@@ -40,6 +41,10 @@ OTA_ALLOWED_TARGETS = {
 _last_check_ms = None
 _last_result = "확인 전"
 
+# 실제로 파일이 바뀌어 적용된 마지막 시각/버전은 재부팅 후에도 남아있어야
+# 하므로(업데이트 적용 자체가 재부팅을 유발함) 파일에 저장합니다.
+OTA_STATE_FILE = "ota_state.json"
+
 
 def get_ota_status_text():
     if _last_check_ms is None:
@@ -47,6 +52,44 @@ def get_ota_status_text():
     ago_sec = utime.ticks_diff(utime.ticks_ms(), _last_check_ms) // 1000
     ago_str = f"{ago_sec}초 전" if ago_sec < 60 else f"{ago_sec // 60}분 전"
     return f"{ago_str} - {_last_result}"
+
+
+def _save_ota_state(version, applied_names):
+    try:
+        state = {
+            "version": version or "?",
+            "applied_at": utime.time(),
+            "files": applied_names,
+        }
+        with open(OTA_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        log_error("OTA 상태 저장", e)
+
+
+def get_last_update_text():
+    """마지막으로 실제 업데이트가 적용된 시각(NTP 동기화 기준, KST)과 버전.
+    아직 한 번도 적용된 적이 없으면(또는 NTP 동기화 전이면) 안내 문구를 반환."""
+    try:
+        with open(OTA_STATE_FILE) as f:
+            state = json.load(f)
+    except Exception:
+        return "아직 없음"
+
+    version = state.get("version", "?")
+    applied_at = state.get("applied_at", 0)
+    if not applied_at:
+        return f"버전 {version} (시각 불명)"
+
+    # utime.time()은 NTP 동기화가 안 됐으면 부팅 이후 경과 초에 불과해
+    # 말이 안 되는 날짜가 나올 수 있음 — 대략적인 판별로 2024년 이후만
+    # "실제 날짜"로 취급 (동기화 안 됐으면 훨씬 작은 값이 나옴).
+    if applied_at < 780000000:  # 2024-09-XX 근방 (MicroPython epoch 2000-01-01 기준)
+        return f"버전 {version} (NTP 미동기화, 시각 불명)"
+
+    t = utime.localtime(applied_at + 9 * 3600)  # UTC -> KST(+9h)
+    date_str = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}".format(t[0], t[1], t[2], t[3], t[4])
+    return f"{date_str} (버전 {version})"
 
 
 def _run_ota_check():
@@ -103,6 +146,7 @@ def _run_ota_check():
         gc.collect()
 
     if changed_any:
+        _save_ota_state(manifest.get("_version"), applied_names)
         print("🔄 [OTA] 변경 사항 적용 완료, 3초 후 재부팅합니다...")
         utime.sleep(3)
         machine.reset()

@@ -38,7 +38,7 @@ from web_ui import (
 from file_editor import (
     handle_save_code, is_valid_editable_filename, list_editable_files, revert_file,
 )
-from ota import OTA_CHECK_INTERVAL_MS, trigger_ota_check, get_ota_status_text
+from ota import OTA_CHECK_INTERVAL_MS, trigger_ota_check, get_ota_status_text, get_last_update_text
 from app_manager import (
     load_active_app, list_available_apps, get_active_app_name, set_active_app_name,
 )
@@ -138,6 +138,7 @@ def handle_client(conn, state):
             "thresh": th_val,
             "app_err": state.app_err,
             "ota": get_ota_status_text(),
+            "last_update": get_last_update_text(),
             "mem_free": gc.mem_free()
         })
         resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + data_json
@@ -322,7 +323,8 @@ def handle_client(conn, state):
         html_str = generate_main_html(
             state.mode, state.current_ip, state.wifi_list, state.app_err,
             state.value, state.avg_v, state.status_eng, state.status_kor, state.color_hex,
-            cloud_st, is_mut, th_val, get_ota_status_text(), get_active_app_name()
+            cloud_st, is_mut, th_val, get_ota_status_text(), get_active_app_name(),
+            get_last_update_text()
         )
         html_bytes = html_str.encode('utf-8')
         header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " + str(len(html_bytes)) + "\r\n\r\n"
