@@ -3,6 +3,7 @@ active_app.json
 user_code_tmp.py
 debug.log
 debug_prev.log
+ota_state.json
 __pycache__/
 *.pyc
 .pytest_cache/

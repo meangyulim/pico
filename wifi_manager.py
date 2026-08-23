@@ -22,6 +22,21 @@ def disable_wifi_power_save(wlan_obj):
         log_error("WiFi PowerSave", e)
 
 
+def sync_ntp_time():
+    """
+    피코엔 배터리 RTC가 없어서 매 부팅마다 시계가 리셋됩니다. Wi-Fi 연결
+    성공 직후 NTP로 한 번 맞춰두면, OTA 업데이트 적용 시각처럼 사람이
+    읽을 수 있는 실제 날짜/시간을 기록할 수 있습니다. 실패해도(NTP 서버
+    차단 등) 치명적이지 않으므로 조용히 무시합니다.
+    """
+    try:
+        import ntptime
+        ntptime.settime()
+        print("🕒 NTP 시간 동기화 완료")
+    except Exception as e:
+        log_error("NTP 시간 동기화", e)
+
+
 def load_wifi_config():
     try:
         with open(CONFIG_FILE, "r") as f:
@@ -91,6 +106,7 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3)
                 disable_wifi_power_save(sta)
                 ip = sta.ifconfig()[0]
                 print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
+                sync_ntp_time()
                 if lcd_ref:
                     lcd_ref.display_2lines("WiFi Connected!", ip[:16])
                     utime.sleep(1.5)
