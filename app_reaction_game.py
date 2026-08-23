@@ -26,7 +26,7 @@ BUTTON_PIN = 16
 LED_PIN = 17
 
 # main.py가 요구하는 인터페이스 값들 (게임에서는 대부분 미사용/의미 재활용)
-DISPLAY_UPDATE_INTERVAL_MS = 1000  # 대시보드 갱신 주기 (게임 판정 자체는 타이머/인터럽트라 이 값과 무관하게 정확함)
+DISPLAY_UPDATE_INTERVAL_MS = 1000  # 화면 갱신 주기 (버튼 판정은 별도 타이머라 이 값과 무관)
 CLOUD_SYNC_INTERVAL_MS = 60000
 alert_threshold = 0                # 미사용
 is_muted = True                    # 버저가 없으므로 항상 음소거
@@ -36,11 +36,11 @@ led = machine.Pin(LED_PIN, machine.Pin.OUT)
 led.value(0)
 
 # Grove 버튼 모듈은 대부분 "누르면 HIGH"인 능동-HIGH 방식입니다. 반대로 동작하면
-# PULL_DOWN -> PULL_UP, IRQ_RISING -> IRQ_FALLING으로 같이 바꿔주세요.
+# PULL_DOWN을 PULL_UP으로 바꾸고 _poll_button의 눌림 판정(== 1)을 0으로 바꾸세요.
 button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_DOWN)
 
 # -----------------------------------------------------------------
-# [2] 게임 상태 (모두 폴링 없이 인터럽트/타이머로만 갱신되어 정확함)
+# [2] 게임 상태 (점등은 타이머, 버튼은 20ms 폴링으로 갱신)
 # -----------------------------------------------------------------
 STATE_WAITING = "waiting"  # LED 켜지기 전, 무작위 대기 중
 STATE_LIT = "lit"          # LED 켜짐, 누르길 기다리는 중
@@ -59,18 +59,42 @@ _RESULT_DISPLAY_MS = 2000
 
 _led_timer = machine.Timer(-1)
 
+# -----------------------------------------------------------------
+# 버튼 입력: 인터럽트 대신 폴링 + 안정화 필터
+# -----------------------------------------------------------------
+# 예전에는 Pin.irq()로 잡았는데, Grove 커넥터 접촉이 조금만 불안정해도
+# 아주 짧은 전기적 튐을 "눌림"으로 오인하거나 반대로 진짜 누름을 놓쳤습니다.
+# 이제 20ms마다 값을 직접 읽고, 연속 2회(약 40ms) 같은 값일 때만 상태
+# 변화로 인정합니다. 대가로 측정에 최대 ~40ms 오차가 더해지지만, 접촉이
+# 완벽하지 않은 배선에서도 훨씬 안정적입니다.
+_POLL_MS = 20
+_STABLE_NEEDED = 2
+_raw_value = 0
+_raw_count = 0
+_confirmed = 0
 
-def _on_button_press(pin):
-    # 인터럽트 핸들러는 최대한 가볍게: 디바운스 후 플래그만 세팅
-    global _press_flag, _last_press_ms
-    now = utime.ticks_ms()
-    if utime.ticks_diff(now, _last_press_ms) < _DEBOUNCE_MS:
-        return
-    _last_press_ms = now
-    _press_flag = True
+
+def _poll_button(timer):
+    # 타이머 콜백은 IRQ 문맥에서 돕니다 — 메모리 할당 없이 가볍게 유지.
+    global _raw_value, _raw_count, _confirmed, _press_flag, _last_press_ms
+    raw = button.value()
+    if raw == _raw_value:
+        _raw_count += 1
+    else:
+        _raw_value = raw
+        _raw_count = 1
+    if _raw_count >= _STABLE_NEEDED and _confirmed != _raw_value:
+        _confirmed = _raw_value
+        if _confirmed == 1:
+            now = utime.ticks_ms()
+            if utime.ticks_diff(now, _last_press_ms) >= _DEBOUNCE_MS:
+                _last_press_ms = now
+                _press_flag = True
 
 
-button.irq(trigger=machine.Pin.IRQ_RISING, handler=_on_button_press)
+_poll_timer = machine.Timer(-1)
+_poll_timer.init(mode=machine.Timer.PERIODIC, period=_POLL_MS,
+                 callback=_poll_button)
 
 
 def _on_light_up(timer):

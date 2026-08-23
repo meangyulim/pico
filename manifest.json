@@ -1,5 +1,5 @@
 {
-  "_version": "ffda43bfbd23",
+  "_version": "74fde777aafb",
   "app_dust_monitor.py": {
     "sha256": "c9657db7a058ce63d0d732a6b4c52b2b75a4f385fefa444b9fb8a36da6589a99"
   },
@@ -10,37 +10,40 @@
     "sha256": "3a700ed54cbf27201d75bed3f3829aba088e1348026434c3ed9c14647965c6fe"
   },
   "app_reaction_game.py": {
-    "sha256": "95e28ba6c8a92355842a14ee5a284998a1c4e1e5c32b0626e5fe0b3e96bc4905"
+    "sha256": "4a570046de2985be8768b813a60c932e5f621af72aff4815a297291e2099a4f8"
   },
   "bg_thread.py": {
-    "sha256": "189cbe6e2429280d72163d4a012afe054654157ba89c94734ce7692e7b7362de"
+    "sha256": "8344cf86a37885abcdcb1d49993351c0f0fc162760e2e94bece24d0ed5c6cb8d"
   },
   "boot.py": {
-    "sha256": "d845141c2529f302141bcd4575c305f45a28e4c936f1ef72e5d837d18d8bbfc6"
+    "sha256": "54d345fa1deebc38ad6e961dec6e3a0881edea97e052faa98a293500f1deab36"
   },
   "console_log.py": {
-    "sha256": "1ab90d3d69f0a23665b3a46c119a2c08cba42fdea1c055e2aac8184dc0db6d8b"
+    "sha256": "4ea71e74e9f53f7d2231f8e17461ea88cc18c3441e043b7f90d5398735705d44"
   },
   "file_editor.py": {
-    "sha256": "4cb72d5cf5c0a3a363c30109f4cb43eda9046bb08d763334e4df8d90b779ac0d"
+    "sha256": "456058a3b4c0b6730bb183e2a20d30e81c82930a9090d5971a91e7f7c9a349d5"
+  },
+  "httpd.py": {
+    "sha256": "e6821f716fc7271646bbffe0e6e4f4bde6e3f16dd1b350ea11660b5dd0edc620"
   },
   "lcd_driver.py": {
     "sha256": "0e1e985421b5c038c6f082c02fa64d459cf758922f917b049ddaade06dd2ced2"
   },
   "main.py": {
-    "sha256": "8bf09ffa2c28f011422ffbb981eae8bd27117914a6f5ccbd323a80be182a8d6a"
+    "sha256": "ab9e579f681fac558ca2baa91d8f178a788685a1fee4673c7348ad138f767005"
   },
   "netutil.py": {
-    "sha256": "3101adf9186828e2171dd21b88972b2103f4f1fa3cac1dbe19325f60272bd285"
+    "sha256": "43a328205db8efe4ea03e3c53cd971fddea71dc016ae8832181b175892683905"
   },
   "ota.py": {
-    "sha256": "dca7678d1f3281bd6f8ea4df859452d8537115c750a8f7cbae77d9020fd1dc7c"
+    "sha256": "d70206a027d19ec454dff7053477cc9bcbf54ae8fbe55d09eff3a5d8f78fe045"
   },
   "watchdog.py": {
     "sha256": "ea4b847ae87a3e4fd5dcfb382896037b12dbafb391ce09f166058783bde8ae40"
   },
   "web_ui.py": {
-    "sha256": "b10d6793d88bb5a5974ee74ed455963976cf83f34b34e1b042dec64cc97b5005"
+    "sha256": "66879ce74d6a5abe238936380bbc009440c6fca4e56b2ff368245ef0779934ab"
   },
   "wifi_manager.py": {
     "sha256": "255224c84b72275b4e58db10fabc41a215965722e37d5aee1d6ceddef89ffc7d"

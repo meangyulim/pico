@@ -1,478 +1,330 @@
 # =================================================================
-# web_ui.py : 웹 대시보드/파일 브라우저/에디터/로그/앱 전환 화면 HTML 생성
+# web_ui.py : 웹 화면 HTML 생성 (조각 단위 스트리밍)
 # =================================================================
-# main.py는 이 함수들을 호출해서 응답 본문을 만들기만 하고, 실제 소켓
-# 전송/라우팅은 main.py의 handle_client()가 담당합니다.
+# 모든 페이지 함수는 완성된 HTML 문자열을 반환하지 않고, 작은 조각을
+# 차례로 yield하는 제너레이터입니다. httpd가 그 조각을 받는 즉시 소켓으로
+# 흘려보내므로, 페이지가 아무리 커도 메모리에는 조각 하나만 남습니다.
+#
+# 예전에는 페이지 전체를 f-string으로 한 번에 만들었는데, 대시보드 기준
+# 문자열 7KB + 인코딩된 bytes 7.4KB = 요청당 약 14KB를 동시에 들고
+# 있었습니다. MicroPython 힙은 조각화되면 이런 큰 연속 블록을 잡지
+# 못해서, 여유 메모리가 370KB인데도 할당이 실패하는 일이 생깁니다
+# (실제로 OTA 중 ENOMEM으로 겪음).
+#
+# CSS도 페이지마다 통째로 중복돼 있던 것을 BASE_CSS 하나로 합쳤습니다
+# (예전엔 <style> 블록 6개가 web_ui.py의 39%를 차지했습니다).
+#
+# 이 파일은 하드웨어 모듈을 import하지 않는 순수 문자열 생성이라
+# 데스크톱에서 그대로 테스트할 수 있습니다 (tests/test_web_ui.py).
+# =================================================================
+from netutil import esc
+
+BASE_CSS = (
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+    "background:#0f172a;color:#f8fafc;padding:16px;-webkit-text-size-adjust:100%}"
+    "a{color:#38bdf8}"
+    "h3{font-size:16px;color:#38bdf8}"
+    ".hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}"
+    ".back{color:#94a3b8;text-decoration:none;font-size:12px;padding:6px 10px;"
+    "background:#1e293b;border-radius:6px;border:1px solid #334155}"
+    ".card{background:#1e293b;border:1px solid #334155;border-radius:16px;"
+    "padding:16px;margin-bottom:12px}"
+    ".note{font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px}"
+    ".row{display:block;padding:12px 14px;background:#1e293b;border:1px solid #334155;"
+    "border-radius:10px;color:#f1f5f9;text-decoration:none;font-size:14px;margin-bottom:8px}"
+    ".row:active{background:#334155}"
+    ".btn{width:100%;padding:12px;background:#0284c7;color:#fff;border:none;"
+    "border-radius:10px;font-size:14px;font-weight:bold}"
+    "label{display:block;font-size:12px;font-weight:600;margin-bottom:4px;color:#cbd5e1}"
+    "input,select,textarea{width:100%;padding:10px 12px;margin-bottom:12px;border-radius:8px;"
+    "border:1px solid #475569;background:#0f172a;color:#fff;font-size:16px}"
+    ".info{font-size:13px;color:#94a3b8;line-height:1.9}"
+    ".info b{color:#f1f5f9}"
+    ".tag{float:right;font-size:11px;background:#065f46;color:#34d399;"
+    "padding:3px 8px;border-radius:6px;font-weight:bold}"
+    ".t{font-size:15px;font-weight:bold;margin-bottom:4px}"
+    ".d{font-size:12px;color:#94a3b8;line-height:1.5}"
+)
 
 
-def generate_main_html(mode, current_ip, wifi_list, app_err, value, volt_val, status_eng, status_kor, color_hex, cloud_msg, is_muted_val, thresh_val, ota_status, active_app, last_update):
-    is_offline = (mode == "OFFLINE_AP")
-    mode_badge_text = "📡 오프라인 단독 AP 모드" if is_offline else "🌐 온라인 모드"
-    mode_badge_color = "#38bdf8" if is_offline else "#10b981"
-
-    wifi_options = ""
-    for w in wifi_list:
-        wifi_options += f'<option value="{w}">{w}</option>'
-
-    error_banner = ""
-    if app_err:
-        error_banner = f"""<div style="background:#ef444422; border:1px solid #ef4444; border-radius:16px; padding:14px; margin-bottom:16px; color:#fca5a5; font-size:13px; text-align:left; line-height:1.5;">
-            <b>⚠️ 활성 앱 실행 오류 ({active_app})</b><br>
-            <code style="color:#fff; word-break:break-all; display:block; margin:6px 0; background:#0f172a; padding:6px 8px; border-radius:6px;">{app_err}</code>
-            👉 아래 <b>[📝 웹 에디터]</b>로 코드를 고치거나 <b>[🔌 앱 전환]</b>에서 다른 앱을 선택하세요.
-        </div>"""
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico 대시보드</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 20px 16px; -webkit-text-size-adjust: 100%; }}
-        .card {{ background: #1e293b; border-radius: 24px; padding: 28px 20px; max-width: 380px; margin: 0 auto 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; }}
-        .mode-badge {{ display: inline-block; padding: 4px 12px; border-radius: 20px; background: {mode_badge_color}; color: #000; font-size: 12px; font-weight: bold; margin-bottom: 12px; }}
-        .status-badge {{ display: inline-block; padding: 8px 22px; border-radius: 50px; background: {color_hex}; color: #000; font-weight: 800; font-size: 15px; margin-bottom: 12px; transition: background 0.3s; }}
-        .value {{ font-size: 52px; font-weight: 800; margin: 8px 0; color: #fff; }}
-        .sub-info {{ font-size: 13px; color: #94a3b8; margin-top: 16px; border-top: 1px solid #334155; padding-top: 14px; line-height: 1.8; text-align: left; }}
-        .sub-info b {{ color: #f1f5f9; }}
-        .live-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 6px; animation: pulse 1.5s infinite; }}
-        @keyframes pulse {{ 0% {{ opacity: 1; transform: scale(1); }} 50% {{ opacity: 0.3; transform: scale(0.8); }} 100% {{ opacity: 1; transform: scale(1); }} }}
-
-        details {{ background: #1e293b; border-radius: 16px; padding: 14px 18px; max-width: 380px; margin: 0 auto; border: 1px solid #334155; text-align: left; }}
-        summary {{ font-size: 14px; font-weight: bold; color: #38bdf8; cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; }}
-        summary::-webkit-details-marker {{ display: none; }}
-        summary::after {{ content: '⚙️'; font-size: 14px; }}
-        .wifi-form {{ margin-top: 14px; border-top: 1px solid #334155; padding-top: 12px; }}
-        label {{ display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: #cbd5e1; }}
-        select, input[type="text"], input[type="password"] {{ width: 100%; padding: 10px 12px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 16px; }}
-        select:focus, input:focus {{ outline: none; border-color: #38bdf8; }}
-        .btn {{ width: 100%; padding: 12px; background: #0284c7; color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        {error_banner}
-        <div class="mode-badge">{mode_badge_text}</div><br>
-        <div class="status-badge" id="statusBadge">{status_kor} ({status_eng})</div>
-        <div class="value" id="dustVal">{value:.0f}</div>
-        <div class="sub-info">
-            • <span class="live-dot"></span>실시간 로컬 연결: <b>정상</b><br>
-            • 🔌 활성 앱: <b>{active_app}</b><br>
-            • ☁️ 클라우드 동기화: <b id="cloudVal">{cloud_msg}</b><br>
-            • 🔔 알림 제어 상태: <b id="controlVal">Mute: {is_muted_val} / 기준: {thresh_val:.0f}</b><br>
-            • 🛰️ OTA 마지막 확인: <b id="otaVal">{ota_status}</b><br>
-            • 📦 마지막 업데이트: <b id="lastUpdateVal">{last_update}</b><br>
-            • 🧠 여유 메모리: <b id="memVal">-</b><br>
-            • 기기 IP 주소: <b>{current_ip}</b>
-        </div>
-    </div>
-
-    <details>
-        <summary>📶 Wi-Fi 공유기 연결 설정</summary>
-        <form action="/save" method="GET" class="wifi-form">
-            <label>주변 Wi-Fi 선택</label>
-            <select name="ssid_select" onchange="document.getElementById('ssid_in').value = this.value;">
-                <option value="">-- 검색된 Wi-Fi 목록 --</option>
-                {wifi_options}
-            </select>
-            <label>Wi-Fi 이름 (SSID)</label>
-            <input type="text" name="ssid" id="ssid_in" placeholder="Wi-Fi 이름 직접 입력 가능" required>
-            <label>Wi-Fi 비밀번호</label>
-            <input type="password" name="password" placeholder="비밀번호 (공개 Wi-Fi는 빈칸)">
-            <button type="submit" class="btn">저장 및 공유기 연결</button>
-        </form>
-    </details>
-
-    <div style="margin-top: 14px; max-width: 380px; margin-left: auto; margin-right: auto; display: flex; flex-direction: column; gap: 10px;">
-        <a href="/ota/check" style="display: block; text-decoration: none; padding: 12px; background: #0284c7; border: 1px solid #0369a1; border-radius: 12px; color: #fff; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">🛰️ 지금 업데이트 확인</a>
-        <a href="/apps" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">🔌 앱 전환</a>
-        <a href="/edit" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📝 웹 에디터 열기</a>
-        <a href="/logs" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📜 실시간 로그 보기</a>
-        <a href="/power" style="display: block; text-decoration: none; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #38bdf8; font-size: 14px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">⚡ 전원 관리</a>
-    </div>
-
-    <script>
-        async function updateData() {{
-            try {{
-                const res = await fetch('/data?t=' + Date.now());
-                if(res.ok) {{
-                    const d = await res.json();
-                    document.getElementById('dustVal').innerText = d.value.toFixed(0);
-                    document.getElementById('cloudVal').innerText = d.cloud;
-                    document.getElementById('controlVal').innerText = 'Mute: ' + d.mute + ' / 기준: ' + d.thresh;
-                    document.getElementById('otaVal').innerText = d.ota;
-                    document.getElementById('lastUpdateVal').innerText = d.last_update;
-                    document.getElementById('memVal').innerText = (d.mem_free / 1024).toFixed(1) + ' KB';
-                    const badge = document.getElementById('statusBadge');
-                    badge.innerText = d.kor + ' (' + d.eng + ')';
-                    badge.style.background = d.color;
-                }}
-            }} catch(e) {{}}
-        }}
-        setInterval(updateData, 2000);
-        updateData();
-    </script>
-</body>
-</html>"""
-    return html
+def _head(title, extra_css=None):
+    yield ('<!DOCTYPE html><html><head><meta charset="UTF-8">'
+           '<meta name="viewport" content="width=device-width,initial-scale=1.0,'
+           'maximum-scale=1.0,user-scalable=no"><title>')
+    yield esc(title)
+    yield '</title><style>'
+    yield BASE_CSS
+    if extra_css:
+        yield extra_css
+    yield '</style></head><body>'
 
 
-def generate_logs_html():
-    html = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico 원격 콘솔</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 12px; -webkit-text-size-adjust: 100%; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        h3 { font-size: 15px; color: #38bdf8; }
-        .back-btn { color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }
-        .note { font-size: 11px; color: #94a3b8; margin-bottom: 8px; }
-        #logBox { width: 100%; height: 75vh; background: #000; color: #4ade80; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5; border: 1px solid #334155; border-radius: 10px; padding: 10px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h3>📜 원격 콘솔 (최근 200줄)</h3>
-        <a href="/" class="back-btn">⬅ 메인으로</a>
-    </div>
-    <div class="note">Wi-Fi로만 연결돼 있어도 Thonny 시리얼 콘솔과 비슷하게 print() 출력을 볼 수 있습니다. 2초마다 자동 갱신됩니다.</div>
-    <div id="logBox">불러오는 중...</div>
-
-    <script>
-        const box = document.getElementById('logBox');
-        async function refreshLogs() {
-            try {
-                const res = await fetch('/logs.txt?t=' + Date.now());
-                if (res.ok) {
-                    const text = await res.text();
-                    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
-                    box.textContent = text;
-                    if (atBottom) box.scrollTop = box.scrollHeight;
-                }
-            } catch (e) {}
-        }
-        setInterval(refreshLogs, 2000);
-        refreshLogs();
-    </script>
-</body>
-</html>"""
-    return html
+def _hdr(title, back_href="/", back_text="⬅ 메인으로"):
+    yield '<div class="hdr"><h3>'
+    yield esc(title)
+    yield '</h3><a href="'
+    yield back_href
+    yield '" class="back">'
+    yield back_text
+    yield '</a></div>'
 
 
-def generate_file_list_html(files):
-    rows = ""
-    for name in files:
-        rows += f'<a href="/edit?file={name}" class="file-row">📄 {name}</a>'
-    if not rows:
-        rows = '<p style="color:#94a3b8;font-size:13px;">편집 가능한 파일이 없습니다.</p>'
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico 파일 브라우저</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; -webkit-text-size-adjust: 100%; }}
-        h3 {{ font-size: 16px; color: #38bdf8; margin-bottom: 4px; }}
-        .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
-        .note {{ font-size: 12px; color: #94a3b8; margin-bottom: 14px; line-height: 1.5; }}
-        .file-list {{ display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }}
-        .file-row {{ display: block; padding: 12px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 10px; color: #f1f5f9; text-decoration: none; font-size: 14px; }}
-        .file-row:active {{ background: #334155; }}
-        .new-file {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }}
-        label {{ display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: #cbd5e1; }}
-        input[type="text"] {{ width: 100%; padding: 10px 12px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 16px; }}
-        .btn {{ width: 100%; padding: 12px; background: #0284c7; color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h3>📁 파일 브라우저</h3>
-        <a href="/" class="back-btn">⬅ 메인으로</a>
-    </div>
-    <div class="note">boot.py는 부팅 안전망이라 목록에서 제외됩니다. main.py를 포함한 다른 모든 .py 파일을 수정할 수 있으며, 저장할 때마다 이전 버전이 자동 백업됩니다.</div>
-
-    <div class="file-list">
-        {rows}
-    </div>
-
-    <div class="new-file">
-        <form action="/edit" method="GET">
-            <label>새 파일 이름 (.py)</label>
-            <input type="text" name="file" placeholder="예: sensor2.py" required>
-            <button type="submit" class="btn">파일 만들기 / 열기</button>
-        </form>
-    </div>
-</body>
-</html>"""
-    return html
+def _end():
+    yield '</body></html>'
 
 
-def generate_editor_html_head(target_file, has_backup):
-    """
-    에디터 페이지를 <textarea> 여는 태그까지만 만듭니다. 코드 본문은
-    handle_client가 따로 조각내어 이스케이프하며 스트리밍합니다 — main.py처럼
-    큰 파일(수십 KB)을 한 번에 문자열로 합치면 메모리 부담이 크고, 첫 바이트가
-    나가기까지 오래 걸려 느린 Wi-Fi에서 타임아웃에 걸리기 쉽기 때문입니다.
-    """
-    if target_file == "main.py":
-        safe_note = "🛡️ 이 파일이 깨지면 boot.py가 자동으로 이전 버전으로 복구합니다"
+# -----------------------------------------------------------------
+# 범용 안내 화면 — 저장 완료/실패, 재부팅 안내 등에 씁니다.
+# 예전에는 이런 화면들이 main.py 안에 인라인 HTML로 6군데 흩어져
+# 중복돼 있었습니다.
+# -----------------------------------------------------------------
+def message(title, heading, body="", color="#38bdf8", redirect=None, delay_ms=5000):
+    yield from _head(title)
+    yield '<div class="card" style="text-align:center;padding:40px 20px">'
+    yield '<h3 style="color:' + color + ';font-size:19px;margin-bottom:12px">'
+    yield esc(heading)
+    yield '</h3>'
+    if body:
+        yield '<p class="d">' + body + '</p>'
+    yield '</div>'
+    if redirect:
+        yield ('<script>setTimeout(function(){location.href="'
+               + redirect + '"},' + str(delay_ms) + ')</script>')
     else:
-        safe_note = "🛡️ 실수해도 시스템은 안 죽습니다 (main.py가 오류를 격리합니다)"
-    revert_btn = f'<a href="/revert?file={target_file}" class="tool-btn" style="text-decoration:none;display:block;" onclick="return confirm(\'{target_file}을(를) 이전 저장본으로 되돌리고 재부팅할까요?\');">↩️ 이전 버전</a>' if has_backup else ""
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico {target_file} 웹 에디터</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 12px; -webkit-text-size-adjust: 100%; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
-        h3 {{ font-size: 15px; color: #38bdf8; }}
-        .safe-tag {{ display: inline-block; font-size: 11px; background: #065f46; color: #34d399; padding: 3px 8px; border-radius: 6px; font-weight: bold; margin-bottom: 8px; }}
-        .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
-
-        .toolbar {{ display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }}
-        .tool-btn {{ padding: 10px 4px; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; text-align: center; }}
-        .tool-btn:active {{ background: #334155; }}
-
-        textarea {{ width: 100%; height: 65vh; background: #1e293b; color: #f1f5f9; font-family: Consolas, "Courier New", monospace; font-size: 16px; line-height: 1.4; border: 1px solid #334155; border-radius: 10px; padding: 12px; outline: none; resize: none; white-space: pre; tab-size: 4; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; }}
-        textarea:focus {{ border-color: #38bdf8; }}
-
-        .btn-save {{ width: 100%; padding: 14px; margin-top: 10px; background: #0284c7; color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }}
-        .btn-save:active {{ background: #0369a1; }}
-
-        #toast {{ display: none; position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #22c55e; color: #000; padding: 10px 20px; border-radius: 25px; font-weight: bold; font-size: 13px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 999; }}
-        .note {{ font-size: 11px; color: #94a3b8; margin-top: 8px; text-align: center; line-height: 1.4; }}
-    </style>
-</head>
-<body>
-    <div id="toast"></div>
-    <div class="header">
-        <h3>📝 {target_file} 편집</h3>
-        <a href="/edit" class="back-btn">⬅ 파일 목록</a>
-    </div>
-    <div class="safe-tag">{safe_note}</div>
-
-    <div class="toolbar">
-        <button type="button" class="tool-btn" onclick="copyAllCode()">📋 전체 복사</button>
-        <button type="button" class="tool-btn" onclick="pasteFromClipboard()">📄 붙여넣기</button>
-        <button type="button" class="tool-btn" style="color:#ef4444;" onclick="clearAllCode()">🗑️ 전체 지우기</button>
-        {revert_btn}
-    </div>
-
-    <form action="/save_code?file={target_file}" method="POST" id="codeForm">
-        <textarea name="code" id="codeArea" spellcheck="false" required>"""
-    return html
+        yield '<a href="/" class="row" style="text-align:center">메인으로</a>'
+    yield from _end()
 
 
-def generate_editor_html_tail(target_file):
-    """generate_editor_html_head()로 시작한 페이지를 </textarea>부터 마무리합니다."""
-    html = f"""</textarea>
-        <button type="submit" class="btn-save" onclick="return confirm('{target_file}을(를) 저장하고 피코를 재부팅하시겠습니까?');">💾 저장 및 피코 재부팅</button>
-    </form>
-
-    <div class="note">
-        ※ 16px 폰트 고정으로 아이폰 자동 확대가 방지됩니다.<br>
-        ※ 저장 시 {target_file} 파일로 덮어쓰고(이전 내용은 자동 백업), 내용이 바뀐 경우에만 피코가 자동 재부팅됩니다.
-    </div>
-
-    <script>
-        function showToast(msg, isErr) {{
-            const t = document.getElementById('toast');
-            t.innerText = msg;
-            t.style.background = isErr ? '#ef4444' : '#22c55e';
-            t.style.color = isErr ? '#fff' : '#000';
-            t.style.display = 'block';
-            setTimeout(() => {{ t.style.display = 'none'; }}, 2200);
-        }}
-
-        function copyAllCode() {{
-            const ta = document.getElementById('codeArea');
-            if (navigator.clipboard && navigator.clipboard.writeText) {{
-                navigator.clipboard.writeText(ta.value)
-                    .then(() => showToast('✅ 전체 코드가 복사되었습니다!'))
-                    .catch(() => fallbackCopy(ta));
-            }} else {{
-                fallbackCopy(ta);
-            }}
-        }}
-
-        function fallbackCopy(ta) {{
-            ta.focus();
-            ta.select();
-            ta.setSelectionRange(0, 99999);
-            try {{
-                document.execCommand('copy');
-                showToast('✅ 전체 코드가 복사되었습니다!');
-            }} catch(e) {{
-                showToast('❌ 복사 실패: 직접 길게 눌러 복사해주세요.', true);
-            }}
-        }}
-
-        async function pasteFromClipboard() {{
-            try {{
-                if (navigator.clipboard && navigator.clipboard.readText) {{
-                    const text = await navigator.clipboard.readText();
-                    if (text) {{
-                        document.getElementById('codeArea').value = text;
-                        showToast('✅ 클립보드 내용을 붙여넣었습니다!');
-                        return;
-                    }}
-                }}
-            }} catch(e) {{}}
-            const ta = document.getElementById('codeArea');
-            ta.focus();
-            showToast('💡 입력창을 길게 눌러 [붙여넣기]를 해주세요.');
-        }}
-
-        function clearAllCode() {{
-            if (confirm('에디터 내용을 모두 지우시겠습니까?\\n(다른 앱에서 수정한 코드를 붙여넣기 편리합니다)')) {{
-                const ta = document.getElementById('codeArea');
-                ta.value = '';
-                ta.focus();
-                showToast('🗑️ 내용이 모두 지워졌습니다.');
-            }}
-        }}
-    </script>
-</body>
-</html>"""
-    return html
+# -----------------------------------------------------------------
+# 대시보드 (/)
+# -----------------------------------------------------------------
+DASH_CSS = (
+    ".badge{display:inline-block;padding:4px 12px;border-radius:20px;color:#000;"
+    "font-size:12px;font-weight:bold;margin-bottom:12px}"
+    ".sbadge{display:inline-block;padding:8px 22px;border-radius:50px;color:#000;"
+    "font-weight:800;font-size:15px;margin-bottom:12px;transition:background .3s}"
+    ".val{font-size:52px;font-weight:800;margin:8px 0;color:#fff}"
+    ".mid{text-align:center}"
+    ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;"
+    "margin-right:6px;animation:p 1.5s infinite}"
+    "@keyframes p{0%{opacity:1}50%{opacity:.3}100%{opacity:1}}"
+    "details{background:#1e293b;border-radius:16px;padding:14px 18px;"
+    "border:1px solid #334155;margin-bottom:12px}"
+    "summary{font-size:14px;font-weight:bold;color:#38bdf8;list-style:none}"
+)
 
 
-def generate_app_list_html(apps, active_name):
-    rows = ""
-    for name in apps:
-        is_active = (name == active_name)
-        if is_active:
-            rows += f'<div class="app-row active">✅ {name} <span class="tag">현재 사용 중</span></div>'
-        else:
-            rows += (
-                f'<a href="/apps/set?name={name}" class="app-row" '
-                f'onclick="return confirm(\'{name}(으)로 전환하고 재부팅할까요?\');">🔌 {name}</a>'
-            )
-    if not rows:
-        rows = '<p style="color:#94a3b8;font-size:13px;">app_*.py 형식의 앱 파일이 없습니다.</p>'
+def dashboard(d):
+    """d: mode/ip/wifis/app_err/value/status_eng/status_kor/color/cloud/
+    mute/thresh/ota/active_app/last_update 를 담은 dict."""
+    offline = (d["mode"] == "OFFLINE_AP")
+    yield from _head("Pico 대시보드", DASH_CSS)
 
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico 앱 전환</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; -webkit-text-size-adjust: 100%; }}
-        h3 {{ font-size: 16px; color: #38bdf8; margin-bottom: 4px; }}
-        .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
-        .note {{ font-size: 12px; color: #94a3b8; margin-bottom: 14px; line-height: 1.5; }}
-        .app-list {{ display: flex; flex-direction: column; gap: 8px; }}
-        .app-row {{ display: block; padding: 12px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 10px; color: #f1f5f9; text-decoration: none; font-size: 14px; }}
-        .app-row:active {{ background: #334155; }}
-        .app-row.active {{ border-color: #22c55e; color: #86efac; }}
-        .tag {{ float: right; font-size: 11px; background: #065f46; color: #34d399; padding: 3px 8px; border-radius: 6px; font-weight: bold; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h3>🔌 앱 전환</h3>
-        <a href="/" class="back-btn">⬅ 메인으로</a>
-    </div>
-    <div class="note">연결된 센서/모듈에 맞는 앱을 골라 활성화하세요. 전환하면 즉시 재부팅됩니다. 새 앱은 파일 브라우저(/edit)에서 app_로 시작하는 이름의 .py 파일을 만들면 여기 자동으로 나타납니다.</div>
+    yield '<div class="card mid">'
+    if d.get("app_err"):
+        yield ('<div style="background:#ef444422;border:1px solid #ef4444;border-radius:12px;'
+               'padding:12px;margin-bottom:14px;color:#fca5a5;font-size:13px;text-align:left">'
+               '<b>⚠️ 앱 실행 오류 (')
+        yield esc(d["active_app"])
+        yield ')</b><br><code style="color:#fff;word-break:break-all;display:block;margin:6px 0;'
+        yield 'background:#0f172a;padding:6px 8px;border-radius:6px">'
+        yield esc(d["app_err"])
+        yield '</code>👉 <b>웹 에디터</b>로 고치거나 <b>앱 전환</b>에서 다른 앱을 고르세요.</div>'
 
-    <div class="app-list">
-        {rows}
-    </div>
-</body>
-</html>"""
-    return html
+    yield '<div class="badge" style="background:'
+    yield "#38bdf8" if offline else "#10b981"
+    yield '">'
+    yield "📡 오프라인 AP 모드" if offline else "🌐 온라인 모드"
+    yield '</div><br><div class="sbadge" id="sb" style="background:'
+    yield d["color"]
+    yield '">'
+    yield esc(d["status_kor"]) + ' (' + esc(d["status_eng"]) + ')'
+    yield '</div><div class="val" id="v">'
+    yield "{:.0f}".format(d["value"])
+    yield '</div>'
+
+    yield '<div class="info" style="text-align:left;border-top:1px solid #334155;padding-top:12px">'
+    yield '• <span class="dot"></span>로컬 연결: <b>정상</b><br>'
+    yield '• 🔌 활성 앱: <b>' + esc(d["active_app"]) + '</b><br>'
+    yield '• ☁️ 클라우드: <b id="c">' + esc(d["cloud"]) + '</b><br>'
+    yield '• 🔔 알림: <b id="m">Mute: ' + str(d["mute"]) + ' / 기준: ' + "{:.0f}".format(d["thresh"]) + '</b><br>'
+    yield '• 🛰️ OTA 확인: <b id="o">' + esc(d["ota"]) + '</b><br>'
+    yield '• 📦 마지막 업데이트: <b id="u">' + esc(d["last_update"]) + '</b><br>'
+    yield '• 🧠 여유 메모리: <b id="f">-</b><br>'
+    yield '• ⏱️ 가동 시간: <b id="t">-</b><br>'
+    yield '• IP: <b>' + esc(str(d["ip"])) + '</b></div></div>'
+
+    yield '<details><summary>📶 Wi-Fi 연결 설정</summary>'
+    yield '<form action="/save" method="GET" style="margin-top:12px">'
+    yield '<label>주변 Wi-Fi</label><select onchange="document.getElementById(\'s\').value=this.value">'
+    yield '<option value="">-- 검색된 목록 --</option>'
+    for w in d["wifis"]:
+        yield '<option value="' + esc(w) + '">' + esc(w) + '</option>'
+    yield '</select><label>SSID</label><input type="text" name="ssid" id="s" required>'
+    yield '<label>비밀번호</label><input type="password" name="password">'
+    yield '<button type="submit" class="btn">저장 및 연결</button></form></details>'
+
+    for href, label in (("/ota/check", "🛰️ 지금 업데이트 확인"), ("/apps", "🔌 앱 전환"),
+                        ("/edit", "📝 웹 에디터"), ("/logs", "📜 실시간 로그"),
+                        ("/power", "⚡ 전원 관리")):
+        yield '<a href="' + href + '" class="row" style="text-align:center;color:#38bdf8;font-weight:bold">'
+        yield label + '</a>'
+
+    yield ("<script>function g(i){return document.getElementById(i)}"
+           "async function u(){try{var r=await fetch('/data?t='+Date.now());"
+           "if(!r.ok)return;var d=await r.json();"
+           "g('v').innerText=d.value.toFixed(0);g('c').innerText=d.cloud;"
+           "g('m').innerText='Mute: '+d.mute+' / 기준: '+d.thresh;"
+           "g('o').innerText=d.ota;g('u').innerText=d.last_update;"
+           "g('f').innerText=(d.mem_free/1024).toFixed(1)+' KB';"
+           "g('t').innerText=d.uptime;"
+           "var b=g('sb');b.innerText=d.kor+' ('+d.eng+')';b.style.background=d.color;"
+           "}catch(e){}}setInterval(u,2000);u()</script>")
+    yield from _end()
 
 
-def generate_power_html(power_mode, uptime_sec, cpu_mhz, wdt_active):
-    """전원 관리 화면 — 컴퓨터의 전원 옵션처럼 다시 시작/절전/종료를 제공합니다."""
-    hours = uptime_sec // 3600
-    minutes = (uptime_sec % 3600) // 60
-    uptime_str = f"{hours}시간 {minutes}분" if hours else f"{minutes}분"
-    is_sleeping = (power_mode == "SLEEP")
-    wdt_str = "켜짐 (먹통 시 자동 재부팅)" if wdt_active else "꺼짐"
+# -----------------------------------------------------------------
+# 원격 콘솔 (/logs)
+# -----------------------------------------------------------------
+def logs_page():
+    yield from _head("Pico 원격 콘솔")
+    yield from _hdr("📜 원격 콘솔")
+    yield '<div class="note">Wi-Fi만 연결돼 있어도 print() 출력을 볼 수 있습니다. 2초마다 갱신.</div>'
+    yield ('<div id="b" style="width:100%;height:72vh;background:#000;color:#4ade80;'
+           'font-family:Consolas,monospace;font-size:12px;line-height:1.5;'
+           'border:1px solid #334155;border-radius:10px;padding:10px;overflow-y:auto;'
+           'white-space:pre-wrap;word-break:break-all">불러오는 중...</div>')
+    yield ("<script>var b=document.getElementById('b');"
+           "async function r(){try{var x=await fetch('/logs.txt?t='+Date.now());"
+           "if(!x.ok)return;var t=await x.text();"
+           "var at=b.scrollTop+b.clientHeight>=b.scrollHeight-20;"
+           "b.textContent=t;if(at)b.scrollTop=b.scrollHeight;}catch(e){}}"
+           "setInterval(r,2000);r()</script>")
+    yield from _end()
 
-    if is_sleeping:
-        sleep_card = """
-        <a href="/power/wake" class="p-row wake">
-            <div class="p-title">☀️ 절전 해제</div>
-            <div class="p-desc">화면과 센서 측정을 다시 켭니다.</div>
-        </a>"""
+
+# -----------------------------------------------------------------
+# 파일 브라우저 (/edit)
+# -----------------------------------------------------------------
+def file_list(files):
+    yield from _head("Pico 파일 브라우저")
+    yield from _hdr("📁 파일 브라우저")
+    yield ('<div class="note">boot.py는 부팅 안전망이라 목록에서 제외됩니다. '
+           '저장할 때마다 이전 버전이 자동 백업됩니다.</div>')
+    if files:
+        for n in files:
+            yield '<a href="/edit?file=' + esc(n) + '" class="row">📄 ' + esc(n) + '</a>'
     else:
-        sleep_card = """
-        <a href="/power/sleep" class="p-row" onclick="return confirm('절전 모드로 전환할까요?\\n화면이 꺼지고 센서 측정이 멈춥니다. 웹으로 다시 켤 수 있습니다.');">
-            <div class="p-title">🌙 절전 모드</div>
-            <div class="p-desc">LCD와 센서 측정을 끕니다. Wi-Fi/웹서버는 살아있어 이 화면에서 다시 켤 수 있습니다.</div>
-        </a>"""
+        yield '<p class="note">편집 가능한 파일이 없습니다.</p>'
+    yield ('<div class="card"><form action="/edit" method="GET">'
+           '<label>새 파일 이름 (.py)</label>'
+           '<input type="text" name="file" placeholder="예: app_sensor.py" required>'
+           '<button type="submit" class="btn">만들기 / 열기</button></form></div>')
+    yield from _end()
 
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pico 전원 관리</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; -webkit-text-size-adjust: 100%; }}
-        h3 {{ font-size: 16px; color: #38bdf8; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
-        .back-btn {{ color: #94a3b8; text-decoration: none; font-size: 12px; padding: 6px 10px; background: #1e293b; border-radius: 6px; border: 1px solid #334155; }}
-        .status {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; font-size: 13px; color: #94a3b8; line-height: 1.8; margin-bottom: 14px; }}
-        .status b {{ color: #f1f5f9; }}
-        .p-list {{ display: flex; flex-direction: column; gap: 10px; }}
-        .p-row {{ display: block; padding: 14px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; color: #f1f5f9; text-decoration: none; }}
-        .p-row:active {{ background: #334155; }}
-        .p-title {{ font-size: 15px; font-weight: bold; margin-bottom: 4px; }}
-        .p-desc {{ font-size: 12px; color: #94a3b8; line-height: 1.5; }}
-        .p-row.wake {{ border-color: #eab308; }}
-        .p-row.wake .p-title {{ color: #fde047; }}
-        .p-row.reboot {{ border-color: #38bdf8; }}
-        .p-row.reboot .p-title {{ color: #7dd3fc; }}
-        .p-row.halt {{ border-color: #ef4444; }}
-        .p-row.halt .p-title {{ color: #fca5a5; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h3>⚡ 전원 관리</h3>
-        <a href="/" class="back-btn">⬅ 메인으로</a>
-    </div>
 
-    <div class="status">
-        • 현재 상태: <b>{'절전 중' if is_sleeping else '정상 작동'}</b><br>
-        • 가동 시간: <b>{uptime_str}</b><br>
-        • CPU 클럭: <b>{cpu_mhz} MHz</b><br>
-        • 워치독: <b>{wdt_str}</b>
-    </div>
+# -----------------------------------------------------------------
+# 에디터 (/edit?file=..) — 코드 본문은 httpd가 파일에서 조각내어 흘려보냅니다
+# -----------------------------------------------------------------
+EDITOR_CSS = (
+    "textarea{height:62vh;font-family:Consolas,monospace;line-height:1.4;"
+    "resize:none;white-space:pre;tab-size:4}"
+    ".tb{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px}"
+    ".tbtn{padding:10px 4px;background:#1e293b;color:#cbd5e1;border:1px solid #334155;"
+    "border-radius:8px;font-size:13px;font-weight:600;text-align:center;text-decoration:none}"
+)
 
-    <div class="p-list">
-        <a href="/power/reboot" class="p-row reboot" onclick="return confirm('지금 다시 시작할까요?');">
-            <div class="p-title">🔄 다시 시작</div>
-            <div class="p-desc">즉시 재부팅합니다. 약 20~30초 후 다시 접속할 수 있습니다.</div>
-        </a>
-{sleep_card}
-        <a href="/power/halt" class="p-row halt" onclick="return confirm('시스템을 종료할까요?\\n\\n웹서버가 꺼져서 이 화면으로는 다시 켤 수 없습니다.\\n전원을 뽑았다 다시 꽂아야 복구됩니다.');">
-            <div class="p-title">⏻ 시스템 종료</div>
-            <div class="p-desc">화면·웹서버·센서를 모두 정지시켜 전원을 뽑아도 안전한 상태로 둡니다. <b style="color:#fca5a5;">복구하려면 전원을 다시 인가해야 합니다.</b></div>
-        </a>
-    </div>
-</body>
-</html>"""
-    return html
+
+def editor_head(name, has_backup):
+    safe = esc(name)
+    yield from _head("편집: " + name, EDITOR_CSS)
+    yield from _hdr("📝 " + name, "/edit", "⬅ 파일 목록")
+    yield '<div class="note">'
+    if name == "main.py":
+        yield '🛡️ 이 파일이 깨져도 boot.py가 이전 버전으로 자동 복구합니다.'
+    else:
+        yield '🛡️ 실수해도 시스템 코어는 죽지 않습니다.'
+    yield '</div><div class="tb">'
+    yield '<button type="button" class="tbtn" onclick="cp()">📋 복사</button>'
+    yield '<button type="button" class="tbtn" onclick="cl()">🗑️ 비우기</button>'
+    if has_backup:
+        yield ('<a href="/revert?file=' + safe + '" class="tbtn" '
+               'onclick="return confirm(\'이전 저장본으로 되돌리고 재부팅할까요?\')">↩️ 되돌리기</a>')
+    else:
+        yield '<span class="tbtn" style="opacity:.4">↩️ 백업 없음</span>'
+    yield '</div><form action="/save_code?file=' + safe + '" method="POST">'
+    yield '<textarea name="code" id="c" spellcheck="false" required>'
+
+
+def editor_tail(name):
+    yield '</textarea>'
+    yield ('<button type="submit" class="btn" onclick="return confirm(\''
+           + esc(name) + ' 저장하고 재부팅할까요?\')">💾 저장 및 재부팅</button></form>')
+    yield '<div class="note" style="margin-top:10px;text-align:center">'
+    yield '※ 내용이 바뀐 경우에만 재부팅합니다.</div>'
+    yield ("<script>var t=document.getElementById('c');"
+           "function cp(){t.select();try{document.execCommand('copy');alert('복사됨')}"
+           "catch(e){alert('직접 길게 눌러 복사해주세요')}}"
+           "function cl(){if(confirm('내용을 모두 지울까요?')){t.value='';t.focus()}}</script>")
+    yield from _end()
+
+
+# -----------------------------------------------------------------
+# 앱 전환 (/apps)
+# -----------------------------------------------------------------
+def app_list(apps, active):
+    yield from _head("Pico 앱 전환")
+    yield from _hdr("🔌 앱 전환")
+    yield ('<div class="note">연결된 센서에 맞는 앱을 고르세요. 전환하면 재부팅됩니다. '
+           '파일 브라우저에서 app_ 로 시작하는 .py를 만들면 여기 자동으로 나타납니다.</div>')
+    if apps:
+        for n in apps:
+            if n == active:
+                yield '<div class="row" style="border-color:#22c55e;color:#86efac">✅ '
+                yield esc(n) + '<span class="tag">사용 중</span></div>'
+            else:
+                yield '<a href="/apps/set?name=' + esc(n) + '" class="row" '
+                yield 'onclick="return confirm(\'' + esc(n) + '(으)로 전환하고 재부팅할까요?\')">🔌 '
+                yield esc(n) + '</a>'
+    else:
+        yield '<p class="note">app_ 로 시작하는 앱 파일이 없습니다.</p>'
+    yield from _end()
+
+
+# -----------------------------------------------------------------
+# 전원 관리 (/power)
+# -----------------------------------------------------------------
+def power_page(power_mode, uptime_str, cpu_mhz, wdt_active):
+    sleeping = (power_mode == "SLEEP")
+    yield from _head("Pico 전원 관리")
+    yield from _hdr("⚡ 전원 관리")
+    yield '<div class="card info">'
+    yield '• 상태: <b>' + ("절전 중" if sleeping else "정상 작동") + '</b><br>'
+    yield '• 가동 시간: <b>' + esc(uptime_str) + '</b><br>'
+    yield '• CPU: <b>' + esc(str(cpu_mhz)) + ' MHz</b><br>'
+    yield '• 워치독: <b>' + ("켜짐 (먹통 시 자동 재부팅)" if wdt_active else "꺼짐") + '</b>'
+    yield '</div>'
+
+    yield ('<a href="/power/reboot" class="row" style="border-color:#38bdf8" '
+           'onclick="return confirm(\'지금 다시 시작할까요?\')">'
+           '<div class="t" style="color:#7dd3fc">🔄 다시 시작</div>'
+           '<div class="d">즉시 재부팅합니다. 20~30초 후 다시 접속할 수 있습니다.</div></a>')
+
+    if sleeping:
+        yield ('<a href="/power/wake" class="row" style="border-color:#eab308">'
+               '<div class="t" style="color:#fde047">☀️ 절전 해제</div>'
+               '<div class="d">화면과 센서 측정을 다시 켭니다.</div></a>')
+    else:
+        yield ('<a href="/power/sleep" class="row" '
+               'onclick="return confirm(\'절전 모드로 전환할까요?\')">'
+               '<div class="t">🌙 절전 모드</div>'
+               '<div class="d">LCD와 센서 측정을 끕니다. 웹서버는 살아있어 여기서 다시 켤 수 있습니다.</div></a>')
+
+    yield ('<a href="/power/halt" class="row" style="border-color:#ef4444" '
+           'onclick="return confirm(\'시스템을 종료할까요?\\n\\n웹으로는 다시 켤 수 없고 '
+           '전원을 다시 인가해야 합니다.\')">'
+           '<div class="t" style="color:#fca5a5">⏻ 시스템 종료</div>'
+           '<div class="d">전원을 뽑아도 안전한 상태로 정지시킵니다. '
+           '<b style="color:#fca5a5">복구하려면 전원 재인가가 필요합니다.</b></div></a>')
+    yield from _end()
