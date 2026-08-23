@@ -1,5 +1,5 @@
 {
-  "_version": "9ed9589bc7ce",
+  "_version": "ffda43bfbd23",
   "app_dust_monitor.py": {
     "sha256": "c9657db7a058ce63d0d732a6b4c52b2b75a4f385fefa444b9fb8a36da6589a99"
   },
@@ -34,7 +34,7 @@
     "sha256": "3101adf9186828e2171dd21b88972b2103f4f1fa3cac1dbe19325f60272bd285"
   },
   "ota.py": {
-    "sha256": "965352e9aac8f91253091fb396d8380d54ac7801bc5a202f9cf413a5ace58a33"
+    "sha256": "dca7678d1f3281bd6f8ea4df859452d8537115c750a8f7cbae77d9020fd1dc7c"
   },
   "watchdog.py": {
     "sha256": "ea4b847ae87a3e4fd5dcfb382896037b12dbafb391ce09f166058783bde8ae40"
