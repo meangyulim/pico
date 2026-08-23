@@ -8,7 +8,10 @@
 
 
 def url_decode(s):
-    """application/x-www-form-urlencoded 값을 UTF-8 기준으로 디코딩합니다."""
+    """application/x-www-form-urlencoded 값을 UTF-8 기준으로 디코딩합니다.
+
+    (OTA 버전/시각 기록 기능 검증용 사소한 변경 — 로직 변화 없음)
+    """
     s = s.replace('+', ' ')
     raw = bytearray()
     i = 0
