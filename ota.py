@@ -139,6 +139,7 @@ def get_last_update_text():
 def _run_ota_check():
     global _last_check_ms, _last_result, _check_in_progress
     changed_any = False
+    completed = False
     applied_names = []
     _check_in_progress = True
     try:
@@ -188,6 +189,7 @@ def _run_ota_check():
             applied_names.append(name)
             print(f"⬇️ [OTA] {name} 업데이트 적용")
 
+        completed = True  # 모든 파일을 끝까지 처리했음 (중간에 끊기지 않음)
         _last_result = f"적용됨: {', '.join(applied_names)}" if applied_names else "변경 없음"
     except Exception as e:
         log_error("OTA 확인", e)
@@ -197,6 +199,19 @@ def _run_ota_check():
         _check_in_progress = False
         gc.collect()
         watchdog.feed()
+
+    if changed_any and not completed:
+        # 중간에 끊긴 채로 재부팅하면 안 됩니다. manifest는 이름순으로
+        # 처리되므로(main.py가 web_ui.py보다 먼저), 도중에 실패하면
+        # "새 main.py + 구 web_ui.py"처럼 버전이 뒤섞인 상태가 됩니다.
+        # 그대로 부팅하면 ImportError -> boot.py가 핵심 모듈을 전부
+        # .bak으로 롤백 -> 다음 주기에 같은 실패 반복, 이 악순환으로
+        # 기기가 계속 구버전에 갇힙니다. 그래서 재부팅하지 않고 이번
+        # 주기를 포기합니다 — 남은 파일은 해시가 여전히 다르므로 다음
+        # 확인 때 이어서 받아옵니다.
+        print("⚠️ [OTA] 업데이트가 중간에 실패해 재부팅하지 않습니다 "
+              f"(적용된 파일: {', '.join(applied_names)}). 다음 확인 때 이어서 받습니다.")
+        return
 
     if changed_any:
         _save_ota_state(manifest.get("_version"), applied_names)
