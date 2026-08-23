@@ -27,6 +27,7 @@ import utime
 from netutil import url_decode
 from bg_thread import register_periodic_task, start_background_worker
 from lcd_driver import I2cLcd
+import watchdog
 from wifi_manager import (
     load_wifi_config, save_wifi_config, scan_nearby_wifis,
     connect_sta_wifi, start_ap_mode, AP_RETRY_INTERVAL_MS,
@@ -34,16 +35,27 @@ from wifi_manager import (
 from web_ui import (
     generate_main_html, generate_logs_html, generate_file_list_html,
     generate_editor_html_head, generate_editor_html_tail, generate_app_list_html,
+    generate_power_html,
 )
 from file_editor import (
     handle_save_code, is_valid_editable_filename, list_editable_files, revert_file,
 )
-from ota import OTA_CHECK_INTERVAL_MS, trigger_ota_check, get_ota_status_text, get_last_update_text
+from ota import (
+    poll_manual_ota_request, request_manual_check,
+    get_ota_status_text, get_last_update_text,
+)
 from app_manager import (
     load_active_app, list_available_apps, get_active_app_name, set_active_app_name,
 )
 
 HEARTBEAT_INTERVAL_MS = 30 * 1000
+# 웹에서 "지금 업데이트 확인"을 누른 요청을 백그라운드 워커가 집어가는 주기
+MANUAL_OTA_POLL_MS = 2 * 1000
+_boot_ticks_ms = utime.ticks_ms()
+
+
+def get_uptime_sec():
+    return utime.ticks_diff(utime.ticks_ms(), _boot_ticks_ms) // 1000
 
 
 # -----------------------------------------------------------------
@@ -80,6 +92,11 @@ class LoopState:
         self.status_eng = "INIT"
         self.status_kor = "준비"
         self.color_hex = "#38bdf8"
+        # 전원 관리: "ON"(정상) / "SLEEP"(절전 — LCD·측정 정지, 웹서버는 유지)
+        self.power_mode = "ON"
+        # 웹 핸들러가 요청한 동작을 메인 루프가 처리하도록 넘기는 신호
+        # (핸들러 안에서 소켓을 닫기 전에 종료해버리면 응답이 안 나감)
+        self.pending_action = None
 
 
 def handle_client(conn, state):
@@ -191,6 +208,8 @@ def handle_client(conn, state):
                 piece = code_text[i:i + CHUNK]
                 escaped = piece.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 conn.sendall(escaped.encode('utf-8'))
+                # 느린 Wi-Fi에서 큰 파일 전송이 워치독 한도를 넘길 수 있음
+                watchdog.feed()
 
             conn.sendall(generate_editor_html_tail(target_file).encode('utf-8'))
             gc.collect()
@@ -298,6 +317,54 @@ def handle_client(conn, state):
         conn.sendall(header.encode('utf-8'))
         conn.sendall(resp_bytes)
 
+    # 6b) 수동 OTA 업데이트 확인 요청
+    elif "GET /ota/check" in first_line:
+        request_manual_check()
+        resp = "HTTP/1.1 303 See Other\r\nLocation: /\r\nConnection: close\r\n\r\n"
+        conn.sendall(resp.encode('utf-8'))
+
+    # 6c) 전원 관리 (다시 시작 / 절전 / 종료)
+    elif "GET /power/reboot" in first_line:
+        print("🔄 [전원] 웹 요청으로 재부팅합니다...")
+        resp_html = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>다시 시작</title><style>body{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}h2{color:#38bdf8;margin-bottom:15px;}</style></head><body><h2>🔄 다시 시작 중...</h2><p>약 20~30초 후 자동으로 메인 화면을 엽니다.</p><script>setTimeout(()=>{location.href='/';}, 30000);</script></body></html>"""
+        resp_b = resp_html.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8') + resp_b)
+        conn.close()
+        utime.sleep(1)
+        machine.reset()
+
+    elif "GET /power/sleep" in first_line:
+        state.pending_action = "sleep"
+        resp = "HTTP/1.1 303 See Other\r\nLocation: /power\r\nConnection: close\r\n\r\n"
+        conn.sendall(resp.encode('utf-8'))
+
+    elif "GET /power/wake" in first_line:
+        state.pending_action = "wake"
+        resp = "HTTP/1.1 303 See Other\r\nLocation: /power\r\nConnection: close\r\n\r\n"
+        conn.sendall(resp.encode('utf-8'))
+
+    elif "GET /power/halt" in first_line:
+        print("⏻ [전원] 웹 요청으로 시스템을 종료합니다 (전원 재인가 전까지 정지)")
+        resp_html = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>시스템 종료</title><style>body{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:50px 20px;}h2{color:#fca5a5;margin-bottom:15px;}p{color:#94a3b8;line-height:1.6;}</style></head><body><h2>⏻ 시스템을 종료했습니다</h2><p>이제 전원을 뽑아도 안전합니다.<br>다시 켜려면 전원을 뽑았다 다시 꽂으세요.</p></body></html>"""
+        resp_b = resp_html.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_b)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8') + resp_b)
+        state.pending_action = "halt"
+
+    elif "GET /power" in first_line:
+        try:
+            cpu_mhz = machine.freq() // 1000000
+        except Exception:
+            cpu_mhz = "?"
+        power_html = generate_power_html(
+            state.power_mode, get_uptime_sec(), cpu_mhz, watchdog.is_active()
+        )
+        resp_bytes = power_html.encode('utf-8')
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {len(resp_bytes)}\r\n\r\n"
+        conn.sendall(header.encode('utf-8'))
+        conn.sendall(resp_bytes)
+
     # 7) 메인 페이지 서빙 (GET /)
     else:
         cloud_st = getattr(app_mod, "cloud_sync_status", "대기 중") if app_mod else "코드 오류"
@@ -323,6 +390,11 @@ def handle_client(conn, state):
 # -----------------------------------------------------------------
 def measure_and_update_lcd(lcd, state, display_toggle):
     app_mod = state.app_mod
+
+    # 절전 모드: LCD와 센서 측정을 쉬고 웹서버만 살려둡니다
+    # (전원 관리 화면에서 "절전 해제"로 복귀).
+    if state.power_mode == "SLEEP":
+        return display_toggle
 
     if app_mod and hasattr(app_mod, 'read_dust_sensor'):
         try:
@@ -414,6 +486,10 @@ def serve_until_reconnect_needed(lcd, state):
 
     print(f"🚀 웹 서버 가동! 접속: http://{state.current_ip}")
 
+    # 부팅과 Wi-Fi 연결(최대 24초+)이 모두 끝난 지금 워치독을 켭니다.
+    # 이보다 먼저 켜면 부팅 도중 리셋 루프에 빠집니다.
+    watchdog.start()
+
     wlan_sta = network.WLAN(network.STA_IF)
     display_toggle = 0
 
@@ -426,7 +502,40 @@ def serve_until_reconnect_needed(lcd, state):
 
     try:
         while True:
+            watchdog.feed()
             now = utime.ticks_ms()
+
+            # A0. 전원 관리 화면에서 요청한 동작 처리 (응답을 이미 보낸 뒤라
+            # 여기서 실제로 상태를 바꿉니다)
+            if state.pending_action:
+                action = state.pending_action
+                state.pending_action = None
+                if action == "sleep":
+                    state.power_mode = "SLEEP"
+                    print("🌙 [전원] 절전 모드로 전환 (LCD·센서 측정 정지)")
+                    if lcd:
+                        lcd.clear()
+                        lcd.set_backlight(False)
+                elif action == "wake":
+                    state.power_mode = "ON"
+                    print("☀️ [전원] 절전 해제")
+                    if lcd:
+                        lcd.set_backlight(True)
+                        lcd.display_2lines("Waking up...", "")
+                elif action == "halt":
+                    if lcd:
+                        lcd.clear()
+                        lcd.display_2lines("System halted.", "Unplug is safe.")
+                        utime.sleep(2)
+                        lcd.clear()
+                        lcd.set_backlight(False)
+                    server_socket.close()
+                    print("⏻ [전원] 시스템 정지됨 — 전원을 다시 인가해야 복구됩니다")
+                    # 워치독은 끌 수 없으므로, 재부팅되지 않도록 feed만 하며
+                    # 아무것도 하지 않고 머무릅니다.
+                    while True:
+                        watchdog.feed()
+                        utime.sleep_ms(200)
 
             # A. Wi-Fi 끊김 감지 -> AP 모드 복귀
             if state.mode == "ONLINE_STA" and not wlan_sta.isconnected():
@@ -549,7 +658,10 @@ def main():
 
     sync_interval = getattr(app_mod, "CLOUD_SYNC_INTERVAL_MS", 60000) if app_mod else 60000
     register_periodic_task("cloud_sync", _make_cloud_sync_task(state), sync_interval)
-    register_periodic_task("ota_check", trigger_ota_check, OTA_CHECK_INTERVAL_MS)
+    # OTA는 자동 주기 확인을 끄고, 웹에서 "지금 업데이트 확인"을 눌렀을 때만
+    # 실행합니다 (ota.OTA_AUTO_CHECK 참고). 이 작업은 그 요청 플래그를
+    # 짧은 주기로 들여다볼 뿐, 평소엔 네트워크를 쓰지 않습니다.
+    register_periodic_task("ota_manual_poll", poll_manual_ota_request, MANUAL_OTA_POLL_MS)
     start_background_worker()
 
     while True:

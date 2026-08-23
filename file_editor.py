@@ -9,6 +9,7 @@ except ImportError:
     import hashlib
 
 from console_log import log_error
+import watchdog
 
 MAX_EDIT_FILE_SIZE = 64 * 1024  # 웹 에디터로 저장 가능한 파일 최대 크기 (64KB)
 
@@ -167,6 +168,9 @@ def handle_save_code(conn, initial_body, content_length, target_file):
                 if out_buf:
                     f_out.write(out_buf)
                     new_hash_ctx.update(out_buf)
+                # 느린 Wi-Fi에서 큰 파일(수십 KB)을 받는 동안 이 루프가
+                # 워치독 한도(8초)를 넘길 수 있음
+                watchdog.feed()
 
             if state == 1 and hex_chars:
                 tail = b'%' + hex_chars
@@ -187,6 +191,7 @@ def handle_save_code(conn, initial_body, content_length, target_file):
                         if not buf:
                             break
                         f_dst.write(buf)
+                        watchdog.feed()
             try:
                 os.remove(temp_file)
             except Exception:

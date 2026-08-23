@@ -6,6 +6,7 @@ import network
 import utime
 
 from console_log import log_error
+import watchdog
 
 CONFIG_FILE = "wifi_config.json"
 AP_SSID = "Pico-Dust-Setup"     # 피코 단독 핫스팟(AP) 이름
@@ -31,7 +32,15 @@ def sync_ntp_time():
     """
     try:
         import ntptime
+        # 기본값이 없거나 너무 길면 여기서 오래 멈출 수 있어 짧게 지정합니다
+        # (워치독이 켜진 뒤라면 8초를 넘기는 순간 강제 재부팅됨).
+        try:
+            ntptime.timeout = 3
+        except Exception:
+            pass
+        watchdog.feed()
         ntptime.settime()
+        watchdog.feed()
         print("🕒 NTP 시간 동기화 완료")
     except Exception as e:
         log_error("NTP 시간 동기화", e)
@@ -59,7 +68,9 @@ def scan_nearby_wifis():
     sta = network.WLAN(network.STA_IF)
     sta.active(True)
     try:
+        watchdog.feed()  # scan()은 수 초간 블로킹됨
         raw_list = sta.scan()
+        watchdog.feed()
         ssids = []
         for item in raw_list:
             ssid = item[0].decode('utf-8', 'ignore').strip()
@@ -86,10 +97,12 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3)
     sta = network.WLAN(network.STA_IF)
 
     for attempt in range(1, attempts + 1):
+        watchdog.feed()
         sta.active(False)
         utime.sleep_ms(200)
         sta.active(True)
         disable_wifi_power_save(sta)
+        watchdog.feed()
 
         if password:
             sta.connect(ssid, password)
@@ -102,6 +115,7 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3)
 
         t = timeout_sec
         while t > 0:
+            watchdog.feed()  # 이 대기 루프만으로도 워치독 한도(8초)에 근접함
             if sta.isconnected():
                 disable_wifi_power_save(sta)
                 ip = sta.ifconfig()[0]
@@ -120,6 +134,7 @@ def connect_sta_wifi(ssid, password="", timeout_sec=8, lcd_ref=None, attempts=3)
 
 
 def start_ap_mode(lcd_ref=None):
+    watchdog.feed()
     sta = network.WLAN(network.STA_IF)
     sta.active(False)
 
