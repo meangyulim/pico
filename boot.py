@@ -16,7 +16,7 @@ import os
 # 개별 센서 앱(app_*.py)은 main.py가 예외 격리로 로드하므로 여기 넣지
 # 않습니다 (앱이 깨져도 시스템 코어는 안 죽음 — app_manager.py 참고).
 CORE_FILES = (
-    "main.py", "console_log.py", "bg_thread.py", "lcd_driver.py",
+    "main.py", "httpd.py", "console_log.py", "bg_thread.py", "lcd_driver.py",
     "wifi_manager.py", "web_ui.py", "file_editor.py", "ota.py",
     "app_manager.py", "netutil.py", "watchdog.py",
 )

@@ -43,15 +43,21 @@ def register_periodic_task(name, fn, interval_ms):
 
 
 def _worker_loop():
+    # 이 루프가 예외로 빠져나가면 주기 작업(OTA 등)이 영영 멈춥니다.
+    # 그런데 부팅 이후에는 스레드를 다시 띄우지 않는 설계라(그게 예전
+    # 불안정의 원인이었음) 여기서 절대 밖으로 나가지 않게 이중으로 감쌉니다.
     while True:
-        now = utime.ticks_ms()
-        for task in _tasks:
-            if utime.ticks_diff(now, task["last_run"]) >= task["interval_ms"]:
-                task["last_run"] = now
-                try:
-                    task["fn"]()
-                except Exception as e:
-                    log_error(f"백그라운드 작업({task['name']})", e)
+        try:
+            now = utime.ticks_ms()
+            for task in _tasks:
+                if utime.ticks_diff(now, task["last_run"]) >= task["interval_ms"]:
+                    task["last_run"] = now
+                    try:
+                        task["fn"]()
+                    except Exception as e:
+                        log_error("백그라운드 작업({})".format(task["name"]), e)
+        except Exception as e:
+            log_error("백그라운드 워커", e)
         utime.sleep_ms(_WORKER_POLL_MS)
 
 
@@ -61,9 +67,18 @@ def start_background_worker():
     _thread를 쓸 수 없는 빌드에서는 아무것도 하지 않습니다 — 이 경우
     등록된 작업들은 실행되지 않습니다 (메인 루프를 막지 않으려고 애초에
     별도 코어로 뺀 것이므로, 동기 폴백은 지원하지 않음).
+
+    스레드 시작 실패(core1을 아직 다른 쪽이 잡고 있는 등)는 삼켜야 합니다.
+    여기서 예외가 그대로 올라가면 main()이 죽고, boot.py가 핵심 모듈을
+    전부 .bak으로 되돌려버립니다 — 주기 작업 하나 못 띄운 대가로는
+    지나치게 큽니다. Wi-Fi·웹서버·LCD는 워커 없이도 정상 동작합니다.
     """
     global _worker_started
     if _worker_started or not THREADING_AVAILABLE:
         return
-    _worker_started = True
-    _thread.start_new_thread(_worker_loop, ())
+    try:
+        _thread.start_new_thread(_worker_loop, ())
+        _worker_started = True
+    except Exception as e:
+        log_error("백그라운드 워커 시작", e)
+        print("⚠️ 백그라운드 작업 없이 계속 진행합니다 (OTA 확인 불가)")

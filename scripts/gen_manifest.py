@@ -14,6 +14,7 @@ import pathlib
 TRACKED_FILES = [
     "boot.py",
     "main.py",
+    "httpd.py",
     "console_log.py",
     "bg_thread.py",
     "lcd_driver.py",

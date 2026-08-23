@@ -1,15 +1,26 @@
 # =================================================================
-# ota.py : GitHub manifest.json 폴링 기반 자동 업데이트
+# ota.py : GitHub manifest.json 기반 수동 업데이트
 # =================================================================
-# 매번 전체 파일을 받으면 느린 Wi-Fi에서 부담이 크므로, 아주 작은
-# manifest.json(파일별 sha256 해시만 담음)만 주기적으로 확인하고,
-# 실제로 해시가 달라진 파일만 통째로 받아옵니다. main.py를 포함한 핵심
-# 모듈이 바뀌면 재부팅해서 boot.py의 안전망을 그대로 거칩니다.
+# 아주 작은 manifest.json(파일별 sha256만 담음)을 받아 로컬 해시와 비교한
+# 뒤, 달라진 파일만 내려받습니다.
+#
+# 이전 구조에서 고친 것들:
+#  * 파일을 res.content로 통째로 메모리에 올렸습니다. main.py는 35KB라
+#    그만한 연속 블록이 필요한데, 힙이 조각나면 여유 메모리가 370KB여도
+#    실패합니다 (실제로 ENOMEM 발생). 이제 512바이트씩 임시 파일로
+#    흘려보내며 해시를 같이 계산합니다 — 메모리에 남는 건 조각 하나뿐.
+#  * 받을 파일 목록을 이름으로 하드코딩해서, 새로 추가된 모듈은 영영
+#    전달되지 못했습니다(판정 주체가 기기의 구버전 ota.py라서). 이제
+#    구조로 판정합니다 (_is_ota_target).
+#  * 중간에 실패해도 재부팅해버려서 버전이 뒤섞인 채 부팅 -> ImportError
+#    -> boot.py 전체 롤백이 반복됐습니다. 이제 완주했을 때만 재부팅합니다.
+#  * 자동 주기 확인을 끄고 대시보드 버튼으로만 실행합니다.
 # =================================================================
 import gc
 import json
 import machine
 import network
+import os
 import urequests
 import utime
 
@@ -19,129 +30,146 @@ except ImportError:
     import hashlib
 
 from console_log import log_error
-from file_editor import file_hash, backup_file
+from file_editor import file_hash, backup_file, _remove_quiet
 
 try:
     import watchdog
-except ImportError:  # OTA로 아직 전달되지 않은 새 모듈 — 없어도 동작해야 함
+except ImportError:
     class watchdog:
         @staticmethod
         def feed():
             pass
 
 OTA_ENABLED = True
-# 자동 주기 확인을 끄고, 대시보드의 "지금 업데이트 확인" 버튼을 눌렀을 때만
-# 확인/적용합니다. 47초마다 GitHub에 HTTPS로 붙던 걸 없애서 네트워크 활동이
-# 크게 줄고, 원인 미상의 먹통을 좁히는 데도 유리합니다.
-OTA_AUTO_CHECK = False
+OTA_AUTO_CHECK = False          # 대시보드의 "지금 업데이트 확인" 버튼으로만 실행
+OTA_CHECK_INTERVAL_MS = 5 * 60 * 1000   # OTA_AUTO_CHECK를 켤 때만 쓰이는 주기
 OTA_REPO_RAW_BASE = "https://raw.githubusercontent.com/meangyulim/pico/main"
 OTA_MANIFEST_URL = OTA_REPO_RAW_BASE + "/manifest.json"
-OTA_CHECK_INTERVAL_MS = 47 * 1000  # 클라우드 동기화(60초)와 안 겹치게 60의 배수가 아닌 값을 씀
 OTA_MAX_FILE_SIZE = 128 * 1024
-OTA_REQUEST_TIMEOUT_SEC = 10  # urequests는 기본 타임아웃이 없어서, 네트워크가
-# 응답을 영영 안 주면 이 스레드가 무한정 멈춰버릴 수 있음 (심하면 GC의
-# "두 코어 동시 정지"에 걸려 메인 루프까지 같이 얼어붙을 수 있음)
+OTA_REQUEST_TIMEOUT_SEC = 10    # urequests는 기본 타임아웃이 없어 무한정 멈출 수 있음
+DL_CHUNK = 512
 
-# 기기별 로컬 설정/로그는 리포 상태로 덮어쓰면 안 됩니다 (각 기기가 고른
-# 앱/Wi-Fi가 매번 초기화되므로). 애초에 manifest에 실리지도 않지만,
-# 이중 안전장치로 여기서도 막습니다.
+OTA_STATE_FILE = "ota_state.json"
+
+# 기기별 로컬 설정/로그는 리포 내용으로 덮어쓰면 안 됩니다.
 OTA_PROTECTED_FILES = {
     "wifi_config.json", "active_app.json", "ota_state.json",
     "debug.log", "debug_prev.log",
 }
 
+_last_check_ms = None
+_last_result = "확인 전"
+_manual_requested = False
+_in_progress = False
+
 
 def _is_ota_target(name):
-    """
-    manifest에 실린 이름이 실제로 받아올 대상인지 판정합니다.
-
-    예전에는 허용 파일명을 집합(OTA_ALLOWED_TARGETS)에 하드코딩했는데,
-    그러면 "새로 추가된 모듈"은 영영 전달되지 못하는 부트스트랩 문제가
-    있었습니다 — 판정을 하는 주체가 기기에 이미 깔려 있는 '구버전'
-    ota.py라서, 새 파일 이름을 알 리가 없기 때문입니다. 실제로
-    watchdog.py를 도입할 때 이 문제가 터졌습니다: main.py 등은 새
-    버전으로 갱신됐는데 watchdog.py만 목록에 없어 안 와서, 재부팅 후
-    ImportError -> boot.py가 핵심 모듈을 전부 .bak으로 롤백 -> 구버전
-    복귀가 반복됐습니다.
-
-    그래서 이제는 이름을 나열하는 대신 구조로 판정합니다. manifest 자체가
-    우리 리포에서 HTTPS로 받아온 것이고 파일마다 sha256을 재검증하므로,
-    목록을 따로 유지해서 얻는 실익도 크지 않았습니다.
-    """
+    """manifest 항목이 실제로 받아올 대상인지 구조로 판정합니다.
+    이름을 나열하지 않으므로 새로 추가된 모듈도 그대로 전달됩니다."""
     if not name or name.startswith("_"):
-        return False  # manifest의 메타데이터(_version 등)
+        return False                      # _version 같은 메타데이터
     if "/" in name or "\\" in name or ".." in name:
-        return False  # 경로 탈출 방지 — 항상 최상위 파일명만 허용
+        return False                      # 경로 탈출 방지
     if name in OTA_PROTECTED_FILES:
         return False
     return name.endswith(".py")
 
-# 웹 대시보드에 "OTA 마지막 확인" 상태를 보여주기 위한 값. 콘솔(Thonny)을
-# 안 보고 있어도 브라우저로 확인할 수 있게 함.
-_last_check_ms = None
-_last_result = "확인 전"
-_manual_check_requested = False
-_check_in_progress = False
 
-# 실제로 파일이 바뀌어 적용된 마지막 시각/버전은 재부팅 후에도 남아있어야
-# 하므로(업데이트 적용 자체가 재부팅을 유발함) 파일에 저장합니다.
-OTA_STATE_FILE = "ota_state.json"
-
-
+# -----------------------------------------------------------------
+# 상태 표시
+# -----------------------------------------------------------------
 def get_ota_status_text():
-    if _check_in_progress:
+    if _in_progress:
         return "확인 중..."
     if _last_check_ms is None:
         return "수동 확인 대기 중" if not OTA_AUTO_CHECK else "확인 전"
-    ago_sec = utime.ticks_diff(utime.ticks_ms(), _last_check_ms) // 1000
-    ago_str = f"{ago_sec}초 전" if ago_sec < 60 else f"{ago_sec // 60}분 전"
-    return f"{ago_str} - {_last_result}"
+    ago = utime.ticks_diff(utime.ticks_ms(), _last_check_ms) // 1000
+    ago_s = "{}초 전".format(ago) if ago < 60 else "{}분 전".format(ago // 60)
+    return ago_s + " - " + _last_result
 
 
-def _save_ota_state(version, applied_names):
+def _save_state(version, names):
     try:
-        state = {
-            "version": version or "?",
-            "applied_at": utime.time(),
-            "files": applied_names,
-        }
         with open(OTA_STATE_FILE, "w") as f:
-            json.dump(state, f)
+            json.dump({"version": version or "?", "applied_at": utime.time(),
+                       "files": names}, f)
     except Exception as e:
         log_error("OTA 상태 저장", e)
 
 
 def get_last_update_text():
-    """마지막으로 실제 업데이트가 적용된 시각(NTP 동기화 기준, KST)과 버전.
-    아직 한 번도 적용된 적이 없으면(또는 NTP 동기화 전이면) 안내 문구를 반환."""
+    """마지막으로 실제 적용된 시각(KST)과 버전. NTP 동기화 전이면 시각 불명."""
     try:
         with open(OTA_STATE_FILE) as f:
-            state = json.load(f)
+            st = json.load(f)
     except Exception:
         return "아직 없음"
-
-    version = state.get("version", "?")
-    applied_at = state.get("applied_at", 0)
-    if not applied_at:
-        return f"버전 {version} (시각 불명)"
-
-    # utime.time()은 NTP 동기화가 안 됐으면 부팅 이후 경과 초에 불과해
-    # 말이 안 되는 날짜가 나올 수 있음 — 대략적인 판별로 2024년 이후만
-    # "실제 날짜"로 취급 (동기화 안 됐으면 훨씬 작은 값이 나옴).
-    if applied_at < 780000000:  # 2024-09-XX 근방 (MicroPython epoch 2000-01-01 기준)
-        return f"버전 {version} (NTP 미동기화, 시각 불명)"
-
-    t = utime.localtime(applied_at + 9 * 3600)  # UTC -> KST(+9h)
-    date_str = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}".format(t[0], t[1], t[2], t[3], t[4])
-    return f"{date_str} (버전 {version})"
+    ver = st.get("version", "?")
+    at = st.get("applied_at", 0)
+    if not at:
+        return "버전 {} (시각 불명)".format(ver)
+    # NTP 동기화 전이면 utime.time()은 부팅 후 경과 초에 불과해 엉뚱한
+    # 날짜가 나옵니다. 2024년 이후 값만 진짜 시각으로 취급합니다.
+    if at < 780000000:
+        return "버전 {} (NTP 미동기화)".format(ver)
+    t = utime.localtime(at + 9 * 3600)   # UTC -> KST
+    return "{:04d}-{:02d}-{:02d} {:02d}:{:02d} (버전 {})".format(
+        t[0], t[1], t[2], t[3], t[4], ver)
 
 
-def _run_ota_check():
-    global _last_check_ms, _last_result, _check_in_progress
-    changed_any = False
+# -----------------------------------------------------------------
+# 다운로드
+# -----------------------------------------------------------------
+def _download_verified(name, expected_hex):
+    """파일을 조각 단위로 임시 파일에 받으면서 해시를 계산합니다.
+    해시가 맞으면 임시 파일 경로를, 아니면 None을 돌려줍니다."""
+    tmp = name + ".tmp"
+    _remove_quiet(tmp)          # 이전 실패로 남은 조각이 있으면 버리고 시작
+    h = hashlib.sha256()
+    total = 0
+    res = None
+    try:
+        res = urequests.get(OTA_REPO_RAW_BASE + "/" + name,
+                            timeout=OTA_REQUEST_TIMEOUT_SEC)
+        with open(tmp, "wb") as f:      # 조각마다 열고 닫지 않고 한 번만 엽니다
+            while True:
+                chunk = res.raw.read(DL_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > OTA_MAX_FILE_SIZE:
+                    print("⚠️ [OTA] {} 크기 초과로 건너뜁니다".format(name))
+                    _remove_quiet(tmp)
+                    return None
+                f.write(chunk)
+                h.update(chunk)
+                watchdog.feed()
+    except Exception as e:
+        log_error("OTA 다운로드({})".format(name), e)
+        _remove_quiet(tmp)
+        return None
+    finally:
+        if res is not None:
+            try:
+                res.close()
+            except Exception:
+                pass
+        gc.collect()
+
+    if h.digest().hex() != expected_hex:
+        # 잘렸거나 손상된 다운로드 — 해시 검증이 이런 경우를 걸러줍니다.
+        print("⚠️ [OTA] {} 해시 불일치로 적용하지 않습니다".format(name))
+        _remove_quiet(tmp)
+        return None
+    return tmp
+
+
+def _run_check():
+    global _last_check_ms, _last_result, _in_progress
+    applied = []
     completed = False
-    applied_names = []
-    _check_in_progress = True
+    version = None
+    _in_progress = True
     try:
         watchdog.feed()
         res = urequests.get(OTA_MANIFEST_URL, timeout=OTA_REQUEST_TIMEOUT_SEC)
@@ -149,110 +177,83 @@ def _run_ota_check():
             manifest = res.json()
         finally:
             res.close()
+        version = manifest.get("_version")
 
-        for name, meta in manifest.items():
-            watchdog.feed()  # 파일이 여러 개면 전체가 8초를 넘길 수 있음
-            # 한 번에 여러 파일을 받으면 파일 내용 + TLS 버퍼가 겹쳐
-            # ENOMEM이 날 수 있어, 파일마다 회수하고 시작합니다.
-            gc.collect()
-            if not _is_ota_target(name):
-                continue  # manifest에 엉뚱한 이름이 있어도 무시 (안전장치)
-            remote_hash_hex = meta.get("sha256", "")
-            if not remote_hash_hex:
-                continue
-            local_digest = file_hash(name)
-            local_hash_hex = local_digest.hex() if local_digest else ""
-            if remote_hash_hex == local_hash_hex:
-                continue
-
-            res2 = urequests.get(OTA_REPO_RAW_BASE + "/" + name, timeout=OTA_REQUEST_TIMEOUT_SEC)
-            try:
-                content = res2.content
-            finally:
-                res2.close()
+        for name in manifest:
             watchdog.feed()
-
-            if len(content) > OTA_MAX_FILE_SIZE:
-                print(f"⚠️ [OTA] {name} 크기가 너무 커서 건너뜁니다 ({len(content)} bytes)")
+            gc.collect()          # 파일마다 회수해서 조각화 압박을 줄임
+            if not _is_ota_target(name):
+                continue
+            remote_hex = manifest[name].get("sha256", "")
+            if not remote_hex:
+                continue
+            local = file_hash(name)
+            if local is not None and local.hex() == remote_hex:
                 continue
 
-            verify = hashlib.sha256()
-            verify.update(content)
-            if verify.digest().hex() != remote_hash_hex:
-                print(f"⚠️ [OTA] {name} 다운로드 내용이 매니페스트 해시와 달라 적용하지 않습니다.")
-                continue
-
+            tmp = _download_verified(name, remote_hex)
+            if tmp is None:
+                continue          # 이 파일만 건너뛰고 나머지는 계속
             backup_file(name)
-            with open(name, "wb") as f:
-                f.write(content)
-            changed_any = True
-            applied_names.append(name)
-            print(f"⬇️ [OTA] {name} 업데이트 적용")
+            _remove_quiet(name)
+            os.rename(tmp, name)  # rename은 원자적 — 반쪽 파일이 남지 않음
+            applied.append(name)
+            print("⬇️ [OTA] {} 적용".format(name))
 
-        completed = True  # 모든 파일을 끝까지 처리했음 (중간에 끊기지 않음)
-        _last_result = f"적용됨: {', '.join(applied_names)}" if applied_names else "변경 없음"
+        completed = True
+        _last_result = ("적용됨: " + ", ".join(applied)) if applied else "변경 없음"
     except Exception as e:
         log_error("OTA 확인", e)
-        _last_result = f"오류: {type(e).__name__}"
+        _last_result = "오류: " + type(e).__name__
     finally:
         _last_check_ms = utime.ticks_ms()
-        _check_in_progress = False
+        _in_progress = False
         gc.collect()
         watchdog.feed()
 
-    if changed_any and not completed:
-        # 중간에 끊긴 채로 재부팅하면 안 됩니다. manifest는 이름순으로
-        # 처리되므로(main.py가 web_ui.py보다 먼저), 도중에 실패하면
-        # "새 main.py + 구 web_ui.py"처럼 버전이 뒤섞인 상태가 됩니다.
-        # 그대로 부팅하면 ImportError -> boot.py가 핵심 모듈을 전부
-        # .bak으로 롤백 -> 다음 주기에 같은 실패 반복, 이 악순환으로
-        # 기기가 계속 구버전에 갇힙니다. 그래서 재부팅하지 않고 이번
-        # 주기를 포기합니다 — 남은 파일은 해시가 여전히 다르므로 다음
-        # 확인 때 이어서 받아옵니다.
-        print("⚠️ [OTA] 업데이트가 중간에 실패해 재부팅하지 않습니다 "
-              f"(적용된 파일: {', '.join(applied_names)}). 다음 확인 때 이어서 받습니다.")
+    if applied and not completed:
+        # 중간에 끊긴 채 재부팅하면 버전이 뒤섞인 상태로 부팅합니다
+        # (manifest는 이름순이라 main.py가 web_ui.py보다 먼저 적용됨).
+        # 그러면 ImportError -> boot.py 전체 롤백 -> 다음 주기에 같은 실패,
+        # 이 악순환으로 기기가 구버전에 갇힙니다. 남은 파일은 해시가 여전히
+        # 다르므로 다음 확인 때 이어받습니다.
+        print("⚠️ [OTA] 중간 실패로 재부팅하지 않습니다 (적용: {}). "
+              "다음 확인 때 이어서 받습니다.".format(", ".join(applied)))
         return
 
-    if changed_any:
-        _save_ota_state(manifest.get("_version"), applied_names)
-        print("🔄 [OTA] 변경 사항 적용 완료, 3초 후 재부팅합니다...")
+    if applied:
+        _save_state(version, applied)
+        print("🔄 [OTA] 적용 완료, 3초 후 재부팅합니다...")
         utime.sleep(3)
         machine.reset()
 
 
-def trigger_ota_check():
-    """Wi-Fi가 연결돼 있지 않으면 조용히 건너뜁니다."""
-    global _last_result, _last_check_ms
+# -----------------------------------------------------------------
+# 외부 진입점
+# -----------------------------------------------------------------
+def request_manual_check():
+    """웹 요청 스레드에서 호출 — 플래그만 세웁니다. 여기서 네트워크를
+    타면 응답이 수 초간 막히므로, 실제 확인은 core1 워커가 합니다."""
+    global _manual_requested
+    _manual_requested = True
+
+
+def poll():
+    """bg_thread 워커가 짧은 주기로 호출합니다."""
+    global _manual_requested, _last_result, _last_check_ms
     if not OTA_ENABLED:
         return
+    if OTA_AUTO_CHECK:
+        if (_last_check_ms is not None and
+                utime.ticks_diff(utime.ticks_ms(), _last_check_ms) < OTA_CHECK_INTERVAL_MS):
+            return
+    elif not _manual_requested:
+        return
+
+    _manual_requested = False
     if not network.WLAN(network.STA_IF).isconnected():
         _last_result = "Wi-Fi 미연결로 건너뜀"
         _last_check_ms = utime.ticks_ms()
         return
-    _run_ota_check()
-
-
-def request_manual_check():
-    """웹에서 '지금 업데이트 확인'을 눌렀을 때 호출합니다. 여기서 바로
-    네트워크를 타면 웹 요청 응답이 수 초간 막히므로, 플래그만 세워두고
-    실제 확인은 core1의 백그라운드 워커가 집어가서 수행합니다."""
-    global _manual_check_requested
-    _manual_check_requested = True
-
-
-def poll_manual_ota_request():
-    """bg_thread 워커가 짧은 주기로 호출 — 요청이 들어와 있을 때만 실행."""
-    global _manual_check_requested
-    if OTA_AUTO_CHECK:
-        # 자동 모드로 되돌린 경우: 이 함수는 짧은 주기로 불리므로, 여기서
-        # OTA_CHECK_INTERVAL_MS를 직접 지켜야 매번 확인하지 않습니다.
-        if _last_check_ms is not None and \
-                utime.ticks_diff(utime.ticks_ms(), _last_check_ms) < OTA_CHECK_INTERVAL_MS:
-            return
-        trigger_ota_check()
-        return
-    if not _manual_check_requested:
-        return
-    _manual_check_requested = False
-    print("🛰️ [OTA] 수동 업데이트 확인 요청됨")
-    trigger_ota_check()
+    print("🛰️ [OTA] 업데이트 확인 시작")
+    _run_check()
