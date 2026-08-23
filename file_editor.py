@@ -19,7 +19,9 @@ EDITOR_EXCLUDED_SUFFIXES = (".bak", ".json", ".tmp")
 
 # .py는 아니지만 웹 에디터로 보고 싶은 파일 (console_log.flush_log_to_file()가
 # 남기는 하트비트/최근 로그 — 기기가 먹통이 됐을 때 재부팅 후 확인용).
-EDITOR_EXTRA_VIEWABLE_FILES = {"debug.log"}
+# debug_prev.log는 boot.py가 재부팅 시점에 debug.log를 옮겨 보관한
+# "지난 세션 마지막 상태" — debug.log는 이번 세션 것으로 30초마다 덮임.
+EDITOR_EXTRA_VIEWABLE_FILES = {"debug.log", "debug_prev.log"}
 
 
 def file_hash(path):
