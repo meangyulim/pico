@@ -17,6 +17,10 @@ MAX_EDIT_FILE_SIZE = 64 * 1024  # 웹 에디터로 저장 가능한 파일 최�
 EDITOR_EXCLUDED_FILES = {"boot.py"}
 EDITOR_EXCLUDED_SUFFIXES = (".bak", ".json", ".tmp")
 
+# .py는 아니지만 웹 에디터로 보고 싶은 파일 (console_log.flush_log_to_file()가
+# 남기는 하트비트/최근 로그 — 기기가 먹통이 됐을 때 재부팅 후 확인용).
+EDITOR_EXTRA_VIEWABLE_FILES = {"debug.log"}
+
 
 def file_hash(path):
     try:
@@ -75,7 +79,7 @@ def is_valid_editable_filename(name):
         return False
     if any(name.endswith(suf) for suf in EDITOR_EXCLUDED_SUFFIXES):
         return False
-    return name.endswith(".py")
+    return name.endswith(".py") or name in EDITOR_EXTRA_VIEWABLE_FILES
 
 
 def list_editable_files():
