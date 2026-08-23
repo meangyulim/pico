@@ -70,12 +70,12 @@ def sync_with_google_sheets(dust_val, volt_val, status_str):
     global is_muted, alert_threshold, cloud_sync_status
     try:
         payload = json.dumps({"dust": round(dust_val, 1), "voltage": round(volt_val, 2), "status": status_str})
-        res = urequests.post(GAS_URL, data=payload, headers={"Content-Type": "application/json"})
+        res = urequests.post(GAS_URL, data=payload, headers={"Content-Type": "application/json"}, timeout=10)
         if res.status_code in (301, 302, 303, 307):
             loc = res.headers.get("Location") or res.headers.get("location")
             res.close()
             if loc:
-                res = urequests.get(loc)
+                res = urequests.get(loc, timeout=10)
         if res and res.status_code == 200:
             d = res.json()
             if "mute" in d:

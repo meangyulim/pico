@@ -26,6 +26,9 @@ OTA_REPO_RAW_BASE = "https://raw.githubusercontent.com/meangyulim/pico/main"
 OTA_MANIFEST_URL = OTA_REPO_RAW_BASE + "/manifest.json"
 OTA_CHECK_INTERVAL_MS = 47 * 1000  # 클라우드 동기화(60초)와 안 겹치게 60의 배수가 아닌 값을 씀
 OTA_MAX_FILE_SIZE = 128 * 1024
+OTA_REQUEST_TIMEOUT_SEC = 10  # urequests는 기본 타임아웃이 없어서, 네트워크가
+# 응답을 영영 안 주면 이 스레드가 무한정 멈춰버릴 수 있음 (심하면 GC의
+# "두 코어 동시 정지"에 걸려 메인 루프까지 같이 얼어붙을 수 있음)
 
 # active_app.json/wifi_config.json 같은 기기별 로컬 설정은 일부러 뺐습니다
 # (리포 상태로 덮어쓰면 각 기기가 고른 앱/Wi-Fi가 매번 초기화되므로).
@@ -97,7 +100,7 @@ def _run_ota_check():
     changed_any = False
     applied_names = []
     try:
-        res = urequests.get(OTA_MANIFEST_URL)
+        res = urequests.get(OTA_MANIFEST_URL, timeout=OTA_REQUEST_TIMEOUT_SEC)
         try:
             manifest = res.json()
         finally:
@@ -114,7 +117,7 @@ def _run_ota_check():
             if remote_hash_hex == local_hash_hex:
                 continue
 
-            res2 = urequests.get(OTA_REPO_RAW_BASE + "/" + name)
+            res2 = urequests.get(OTA_REPO_RAW_BASE + "/" + name, timeout=OTA_REQUEST_TIMEOUT_SEC)
             try:
                 content = res2.content
             finally:
