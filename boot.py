@@ -52,6 +52,27 @@ def _try_import_main():
         return False
 
 
+def _preserve_debug_log():
+    # main.py는 30초마다 debug.log를 덮어씁니다. 재부팅 직후 바로 새
+    # 내용으로 덮이기 전에, 지난 세션의 마지막 상태(먹통 직전 상태)를
+    # debug_prev.log로 옮겨서 /edit?file=debug_prev.log로 계속 볼 수
+    # 있게 합니다.
+    try:
+        os.stat("debug.log")
+    except OSError:
+        return
+    try:
+        try:
+            os.remove("debug_prev.log")
+        except OSError:
+            pass
+        os.rename("debug.log", "debug_prev.log")
+    except Exception:
+        pass
+
+
+_preserve_debug_log()
+
 if not _try_import_main():
     if _restore_backups():
         if not _try_import_main():
