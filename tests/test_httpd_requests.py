@@ -154,7 +154,13 @@ def test_power_page():
 def test_power_freq_valid_value_saves_and_reboots(tmp_path, monkeypatch):
     import cpu_config
     monkeypatch.chdir(tmp_path)
-    conn, state = get("/power/freq?mhz=250")
+    # OFFLINE_AP 모드에서는 비교할 라우터가 없어 Wi-Fi 생존 검증을
+    # 건너뛰므로, 저장 자체는 되는지를 이 상태에서 확인합니다. STA에서의
+    # 검증 로직 자체는 test_logic.py의 _wifi_survives_freq 테스트가 맡습니다.
+    conn = FakeConn(b"GET /power/freq?mhz=250 HTTP/1.1\r\nHost: x\r\n\r\n")
+    state = FakeState()
+    state.mode = "OFFLINE_AP"
+    httpd.handle(conn, state)
     assert "200 OK" in conn.status()
     assert state.pending_action == "reboot"
     assert cpu_config.load_freq_mhz() == 250
