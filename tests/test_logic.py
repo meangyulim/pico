@@ -151,6 +151,25 @@ def test_cpu_config_roundtrips_valid_value(tmp_path, monkeypatch):
     assert cpu_config.load_freq_mhz() == 250
 
 
+# -----------------------------------------------------------------
+# httpd._wifi_survives_freq — 클럭을 저장하기 전에 Wi-Fi가 버티는지 검증
+# -----------------------------------------------------------------
+class _FakeState:
+    def __init__(self, mode):
+        self.mode = mode
+
+
+def test_wifi_survives_freq_skips_when_offline_ap():
+    # 오프라인 AP 모드에서는 비교할 라우터가 없어 검증할 수 없으므로 통과시킵니다.
+    assert httpd._wifi_survives_freq(200, _FakeState("OFFLINE_AP")) is True
+
+
+def test_wifi_survives_freq_fails_when_sta_disconnects():
+    # conftest의 network.WLAN.isconnected()는 항상 False를 반환하므로,
+    # STA 모드에서는 클럭을 바꾼 뒤 "끊김"으로 판정돼야 합니다.
+    assert httpd._wifi_survives_freq(200, _FakeState("ONLINE_STA")) is False
+
+
 def test_nested_routes_are_distinct_entries():
     """부분 문자열 라우팅이었다면 /apps 가 /apps/set 을 가렸습니다."""
     assert httpd.ROUTES[("GET", "/apps")] is not httpd.ROUTES[("GET", "/apps/set")]

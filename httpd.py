@@ -305,6 +305,39 @@ def _r_power_wake(conn, state, params):
     redirect(conn, "/power")
 
 
+def _wifi_survives_freq(mhz, state):
+    """새 클럭을 잠깐 실제로 걸어보고 Wi-Fi가 계속 붙어있는지 확인한 뒤
+    원래 클럭으로 되돌립니다.
+
+    RP2040/2350의 Wi-Fi 칩(CYW43439)은 PIO로 흉내 낸 SPI로 통신하는데,
+    그 타이밍이 시스템 클럭에 물려 있어서 클럭을 바꾸면 Wi-Fi가 끊기거나
+    드라이버가 멈출 수 있습니다. 검증 없이 그냥 저장하고 재부팅하면, 이
+    기기와 안 맞는 클럭이 그대로 저장돼 있어 재부팅할 때마다 Wi-Fi 연결
+    단계에서 먹통이 되는(워치독도 아직 안 켜진 상태라 복구 안 됨) 일이
+    생깁니다. 오프라인 AP 모드에서는 비교할 라우터가 없어 검증할 수
+    없으므로 통과시킵니다.
+    """
+    if state.mode != "ONLINE_STA":
+        return True
+    import machine
+    import network
+    import utime
+    prev_hz = machine.freq()
+    ok = True
+    try:
+        machine.freq(mhz * 1_000_000)
+        utime.sleep_ms(300)
+        ok = network.WLAN(network.STA_IF).isconnected()
+    except Exception:
+        ok = False
+    finally:
+        try:
+            machine.freq(prev_hz)
+        except Exception:
+            pass
+    return ok
+
+
 def _r_power_freq(conn, state, params):
     try:
         mhz = int(params.get('mhz', '').strip())
@@ -313,6 +346,14 @@ def _r_power_freq(conn, state, params):
     if mhz not in cpu_config.FREQ_OPTIONS_MHZ:
         redirect(conn, "/power")
         return
+
+    if not _wifi_survives_freq(mhz, state):
+        print("⚠️ [전원] " + str(mhz) + "MHz에서 Wi-Fi가 끊겨 클럭 변경을 취소합니다.")
+        _msg(conn, "클럭 변경 취소", "⚠️ " + str(mhz) + "MHz에서 Wi-Fi가 끊겼습니다",
+             "이 클럭은 이 기기의 Wi-Fi 칩과 맞지 않는 것 같습니다. 저장하지 않고 "
+             "기존 클럭을 유지합니다. 다른 값을 선택해보세요.", "#fca5a5")
+        return
+
     cpu_config.save_freq_mhz(mhz)
     print("⚙️ [전원] CPU 클럭을 " + str(mhz) + "MHz로 저장. 재부팅합니다...")
     _msg(conn, "클럭 변경", "⚙️ " + str(mhz) + "MHz로 설정 완료",
