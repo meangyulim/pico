@@ -19,7 +19,7 @@ CONFIG_FILE = "wifi_config.json"
 AP_SSID = "Pico-Dust-Setup"     # 피코 단독 핫스팟(AP) 이름
 AP_PASS = ""                    # 비밀번호 (빈칸 = 공개 오픈 AP)
 AP_IP = "192.168.4.1"
-AP_RETRY_INTERVAL_MS = 3 * 60 * 1000  # AP(오프라인) 모드에서 저장된 Wi-Fi를 재시도하는 주기
+AP_RETRY_INTERVAL_MS = 60 * 1000  # AP(오프라인) 모드에서 저장된 Wi-Fi를 재시도하는 주기
 
 
 def disable_wifi_power_save(wlan_obj):
@@ -139,12 +139,27 @@ def _pick_candidates(networks, scan_raw):
     return [(ssid, saved[ssid]) for ssid, _ in order]
 
 
-def connect_sta_wifi(networks, timeout_sec=8, lcd_ref=None, attempts_per_network=2):
+def _scan_raw(sta):
+    watchdog.feed()
+    try:
+        raw = sta.scan()
+    except Exception as e:
+        log_error("WiFi 스캔", e)
+        raw = []
+    watchdog.feed()
+    return raw
+
+
+def connect_sta_wifi(networks, timeout_sec=8, lcd_ref=None, attempts_per_network=3,
+                      scan_rounds=2):
     """저장된 네트워크 중 지금 주변에서 잡히는 것을 신호가 강한 순으로
     골라 접속을 시도합니다 (휴대폰처럼 여러 곳을 저장해두고 그때그때
     잡히는 곳에 자동으로 붙습니다). 신호가 순간적으로 불안정해서 첫
-    시도가 실패하는 경우가 흔해서, 다음 후보로 넘어가기 전에 같은
-    정보로 몇 번(기본 2회) 재시도합니다.
+    시도/첫 스캔이 실패하는 경우가 흔해서, 두 단계로 재시도합니다:
+    한 후보에 대해 같은 정보로 몇 번(기본 3회) 접속을 재시도하고,
+    스캔 자체에 아무 후보도 안 잡히면 다시 스캔합니다(기본 2라운드) —
+    그래도 하나도 못 잡으면 포기하고 호출한 쪽이 AP(핫스팟) 모드로
+    넘어갑니다.
     """
     if not networks:
         return False, None
@@ -158,53 +173,47 @@ def connect_sta_wifi(networks, timeout_sec=8, lcd_ref=None, attempts_per_network
     sta.active(True)
     disable_wifi_power_save(sta)
 
-    watchdog.feed()
-    try:
-        scan_raw = sta.scan()
-    except Exception as e:
-        log_error("WiFi 스캔", e)
-        scan_raw = []
-    watchdog.feed()
+    for scan_round in range(1, scan_rounds + 1):
+        candidates = _pick_candidates(networks, _scan_raw(sta))
+        if not candidates:
+            print(f"📡 저장된 Wi-Fi 중 주변에서 잡히는 곳이 없습니다. "
+                  f"(스캔 {scan_round}/{scan_rounds})")
+            continue
 
-    candidates = _pick_candidates(networks, scan_raw)
-    if not candidates:
-        print("📡 저장된 Wi-Fi 중 주변에서 잡히는 곳이 없습니다.")
-        return False, None
+        for ssid, password in candidates:
+            for attempt in range(1, attempts_per_network + 1):
+                watchdog.feed()
+                sta.active(False)
+                utime.sleep_ms(200)
+                sta.active(True)
+                disable_wifi_power_save(sta)
+                watchdog.feed()
 
-    for ssid, password in candidates:
-        for attempt in range(1, attempts_per_network + 1):
-            watchdog.feed()
-            sta.active(False)
-            utime.sleep_ms(200)
-            sta.active(True)
-            disable_wifi_power_save(sta)
-            watchdog.feed()
+                if password:
+                    sta.connect(ssid, password)
+                else:
+                    sta.connect(ssid)
 
-            if password:
-                sta.connect(ssid, password)
-            else:
-                sta.connect(ssid)
+                print(f"⏳ Wi-Fi [{ssid}] 접속 시도 중... ({attempt}/{attempts_per_network})")
+                if lcd_ref:
+                    lcd_ref.display_2lines(f"WiFi try {attempt}/{attempts_per_network}", ssid[:16])
 
-            print(f"⏳ Wi-Fi [{ssid}] 접속 시도 중... ({attempt}/{attempts_per_network})")
-            if lcd_ref:
-                lcd_ref.display_2lines(f"WiFi try {attempt}/{attempts_per_network}", ssid[:16])
+                t = timeout_sec
+                while t > 0:
+                    watchdog.feed()  # 이 대기 루프만으로도 워치독 한도(8초)에 근접함
+                    if sta.isconnected():
+                        disable_wifi_power_save(sta)
+                        ip = sta.ifconfig()[0]
+                        print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
+                        sync_ntp_time()
+                        if lcd_ref:
+                            lcd_ref.display_2lines("WiFi Connected!", ip[:16])
+                            utime.sleep(1.5)
+                        return True, ip
+                    utime.sleep(1)
+                    t -= 1
 
-            t = timeout_sec
-            while t > 0:
-                watchdog.feed()  # 이 대기 루프만으로도 워치독 한도(8초)에 근접함
-                if sta.isconnected():
-                    disable_wifi_power_save(sta)
-                    ip = sta.ifconfig()[0]
-                    print(f"✅ Wi-Fi 연결 성공! IP: {ip}")
-                    sync_ntp_time()
-                    if lcd_ref:
-                        lcd_ref.display_2lines("WiFi Connected!", ip[:16])
-                        utime.sleep(1.5)
-                    return True, ip
-                utime.sleep(1)
-                t -= 1
-
-            print(f"❌ Wi-Fi [{ssid}] 연결 실패 (시도 {attempt}/{attempts_per_network})")
+                print(f"❌ Wi-Fi [{ssid}] 연결 실패 (시도 {attempt}/{attempts_per_network})")
 
     return False, None
 
