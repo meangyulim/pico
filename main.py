@@ -46,17 +46,22 @@ except ImportError:
         def is_active():
             return False
 
+try:
+    import cpu_config
+except ImportError:
+    class cpu_config:
+        DEFAULT_FREQ_MHZ = 150
+
+        @staticmethod
+        def load_freq_mhz():
+            return 150
+
 
 HEARTBEAT_MS = 60 * 1000        # 하트비트 로그 주기
 LOG_FLUSH_EVERY = 5             # 하트비트 5번마다 파일로 flush (플래시 수명 배려)
 OTA_POLL_MS = 2 * 1000          # "지금 업데이트 확인" 요청을 집어가는 주기
 LCD_I2C_SDA = 8
 LCD_I2C_SCL = 9
-
-# 기본 150MHz -> 250MHz. 전압은 건드리지 않는 선의 보수적인 오버클럭이라
-# 별도 냉각/전압 조정 없이도 안전하다고 보고되는 범위입니다. 그래도 칩마다
-# 개체차가 있으니 문제가 보이면 150_000_000으로 되돌리세요.
-CPU_FREQ_HZ = 250_000_000
 
 
 class State:
@@ -294,7 +299,7 @@ def main():
     print("==========================================")
 
     try:
-        machine.freq(CPU_FREQ_HZ)
+        machine.freq(cpu_config.load_freq_mhz() * 1_000_000)
         print("⚡ CPU 클럭: {}MHz".format(machine.freq() // 1_000_000))
     except Exception as e:
         log_error("CPU 클럭 설정", e)

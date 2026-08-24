@@ -2,6 +2,7 @@
 import file_editor
 import ota
 import httpd
+import cpu_config
 
 
 # -----------------------------------------------------------------
@@ -123,10 +124,31 @@ def test_routes_cover_expected_paths():
         ("GET", "/edit"), ("GET", "/revert"), ("GET", "/save"),
         ("GET", "/apps"), ("GET", "/apps/set"), ("GET", "/ota/check"),
         ("GET", "/power"), ("GET", "/power/reboot"), ("GET", "/power/sleep"),
-        ("GET", "/power/wake"), ("GET", "/power/halt"),
+        ("GET", "/power/wake"), ("GET", "/power/freq"), ("GET", "/power/halt"),
         ("POST", "/save_code"), ("GET", "/favicon.ico"),
     }
     assert expected == set(httpd.ROUTES)
+
+
+# -----------------------------------------------------------------
+# cpu_config — 오버클럭 선택 저장/불러오기
+# -----------------------------------------------------------------
+def test_cpu_config_defaults_to_150_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert cpu_config.load_freq_mhz() == 150
+
+
+def test_cpu_config_rejects_out_of_range_value(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(cpu_config.CONFIG_FILE, "w") as f:
+        f.write('{"freq_mhz": 999}')
+    assert cpu_config.load_freq_mhz() == 150
+
+
+def test_cpu_config_roundtrips_valid_value(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cpu_config.save_freq_mhz(250)
+    assert cpu_config.load_freq_mhz() == 250
 
 
 def test_nested_routes_are_distinct_entries():

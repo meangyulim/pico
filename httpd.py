@@ -40,6 +40,16 @@ except ImportError:
         def feed():
             pass
 
+try:
+    import cpu_config
+except ImportError:
+    class cpu_config:
+        FREQ_OPTIONS_MHZ = (150,)
+
+        @staticmethod
+        def save_freq_mhz(mhz):
+            pass
+
 RECV_CHUNK = 1024
 FILE_CHUNK = 512
 # 워치독(watchdog.WDT_TIMEOUT_MS = 8000ms)보다 짧아야 합니다. conn.recv()나
@@ -266,7 +276,8 @@ def _r_power(conn, state, params):
     except Exception:
         mhz = "?"
     send_stream(conn, web_ui.power_page(
-        state.power_mode, state.uptime_str(), mhz, watchdog_active()))
+        state.power_mode, state.uptime_str(), mhz, watchdog_active(),
+        cpu_config.FREQ_OPTIONS_MHZ, mhz))
 
 
 def watchdog_active():
@@ -294,6 +305,21 @@ def _r_power_wake(conn, state, params):
     redirect(conn, "/power")
 
 
+def _r_power_freq(conn, state, params):
+    try:
+        mhz = int(params.get('mhz', '').strip())
+    except ValueError:
+        mhz = None
+    if mhz not in cpu_config.FREQ_OPTIONS_MHZ:
+        redirect(conn, "/power")
+        return
+    cpu_config.save_freq_mhz(mhz)
+    print("⚙️ [전원] CPU 클럭을 " + str(mhz) + "MHz로 저장. 재부팅합니다...")
+    _msg(conn, "클럭 변경", "⚙️ " + str(mhz) + "MHz로 설정 완료",
+         "재부팅 후 적용됩니다...", "#22c55e", redirect_to="/power", delay_ms=25000)
+    state.pending_action = "reboot"
+
+
 def _r_power_halt(conn, state, params):
     print("⏻ [전원] 시스템을 종료합니다 (전원 재인가 전까지 정지)")
     _msg(conn, "시스템 종료", "⏻ 시스템을 종료했습니다",
@@ -318,6 +344,7 @@ ROUTES = {
     ("GET", "/power/reboot"): _r_power_reboot,
     ("GET", "/power/sleep"): _r_power_sleep,
     ("GET", "/power/wake"): _r_power_wake,
+    ("GET", "/power/freq"): _r_power_freq,
     ("GET", "/power/halt"): _r_power_halt,
     ("POST", "/save_code"): _r_save_code,
 }

@@ -26,8 +26,8 @@ ALL_PAGES = {
     "file_list_empty": lambda: web_ui.file_list([]),
     "app_list": lambda: web_ui.app_list(["app_idle", "app_dust_monitor"], "app_idle"),
     "app_list_empty": lambda: web_ui.app_list([], "app_idle"),
-    "power_on": lambda: web_ui.power_page("ON", "3시간 5분", 150, True),
-    "power_sleep": lambda: web_ui.power_page("SLEEP", "1분", 150, False),
+    "power_on": lambda: web_ui.power_page("ON", "3시간 5분", 150, True, (150, 250), 150),
+    "power_sleep": lambda: web_ui.power_page("SLEEP", "1분", 150, False, (150, 250), 150),
     "message": lambda: web_ui.message("t", "제목", "본문"),
     "editor_head": lambda: web_ui.editor_head("main.py", True),
     "editor_tail": lambda: web_ui.editor_tail("main.py"),
@@ -104,12 +104,20 @@ def test_app_list_marks_active_and_links_others():
 
 
 def test_power_page_reflects_state():
-    on = render(web_ui.power_page("ON", "1분", 150, True))
+    on = render(web_ui.power_page("ON", "1분", 150, True, (150, 250), 150))
     assert "/power/sleep" in on and "/power/wake" not in on
     assert "켜짐" in on
-    sl = render(web_ui.power_page("SLEEP", "1분", 150, False))
+    sl = render(web_ui.power_page("SLEEP", "1분", 150, False, (150, 250), 150))
     assert "/power/wake" in sl and "/power/sleep" not in sl
     assert "꺼짐" in sl
+
+
+def test_power_page_freq_options_and_selection():
+    html = render(web_ui.power_page("ON", "1분", 250, True, (150, 200, 250), 250))
+    assert '<option value="150"' in html
+    assert '<option value="200"' in html
+    assert '<option value="250" selected>' in html
+    assert "/power/freq" in html
 
 
 def test_message_redirect_optional():

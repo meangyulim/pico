@@ -24,6 +24,7 @@ MicroPython 힙은 조각화되면 **여유 메모리가 충분해도 큰 연속
 - `console_log.py` — `print()` 후킹 → 원격 콘솔(`/logs`) 버퍼 + `debug.log` 파일 기록. `main.py`가 가장 먼저 import합니다.
 - `bg_thread.py` — 보조 코어(core1)에서 도는 **영구 워커** 하나가 등록된 주기 작업을 순차 실행합니다.
 - `watchdog.py` — 하드웨어 워치독(8초). 원인 불명의 먹통에서 자동 복구합니다.
+- `cpu_config.py` — CPU 클럭(오버클럭) 선택 저장/불러오기. `/power`에서 고른 값을 재부팅 후 적용합니다.
 - `lcd_driver.py` — I2C 1602 LCD 드라이버 (백라이트 제어 포함).
 - `wifi_manager.py` — Wi-Fi 연결(3회 재시도)/AP 모드/설정 저장/NTP 시각 동기화.
 - `file_editor.py` — 웹 에디터의 저장/백업/되돌리기/목록 로직.
@@ -83,6 +84,9 @@ MicroPython 힙은 조각화되면 **여유 메모리가 충분해도 큰 연속
 - **다시 시작** — 즉시 재부팅
 - **절전** — LCD와 센서 측정을 끄고 웹서버는 유지 (같은 화면에서 해제 가능)
 - **시스템 종료** — 전원을 뽑아도 안전한 상태로 정지. 복구하려면 전원 재인가 필요
+- **CPU 클럭 (오버클럭)** — 150/200/225/250/270/300MHz 중 선택. 전압은 건드리지 않는
+  선의 값들이며, 선택 즉시가 아니라 재부팅 후 적용됩니다 (`cpu_config.json`에 저장).
+  문제가 보이면 기본값(150MHz)으로 되돌리면 됩니다.
 
 ## 하드웨어 워치독
 
@@ -146,8 +150,9 @@ MicroPython 힙은 조각화되면 **여유 메모리가 충분해도 큰 연속
 2. 전체 파일을 업로드합니다. `boot.py`를 **마지막에** 올리면 중간에 재부팅돼도 안전망이 어설프게 작동하지 않습니다.
    ```bash
    for f in main.py httpd.py web_ui.py console_log.py bg_thread.py watchdog.py \
-            lcd_driver.py wifi_manager.py file_editor.py ota.py app_manager.py \
-            netutil.py app_idle.py app_reaction_game.py app_dust_monitor.py boot.py; do
+            cpu_config.py lcd_driver.py wifi_manager.py file_editor.py ota.py \
+            app_manager.py netutil.py app_idle.py app_reaction_game.py \
+            app_dust_monitor.py boot.py; do
      mpremote cp "$f" ":$f"
    done
    ```
