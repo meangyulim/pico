@@ -1,5 +1,5 @@
 {
-  "_version": "b05bf47975f7",
+  "_version": "c6c3baeb468d",
   "app_dust_monitor.py": {
     "sha256": "c9657db7a058ce63d0d732a6b4c52b2b75a4f385fefa444b9fb8a36da6589a99"
   },
@@ -49,6 +49,6 @@
     "sha256": "1049d1ff223631881fd9d5cf9d3c76448564bb2dccbf740e08b326076ef6939d"
   },
   "wifi_manager.py": {
-    "sha256": "80f0cc91b748627ef7a557c137f48201efffd68496559ed5c3a657adb6e4add0"
+    "sha256": "5af2238e6fb45ca590b3c742c86ac47b830f646084d3e33f436c0e21d3138f93"
   }
 }
