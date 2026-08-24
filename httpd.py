@@ -48,6 +48,7 @@ FILE_CHUNK = 512
 # 소켓이 스스로 타임아웃 예외를 던지기 전에 워치독이 먼저 강제 재부팅시킵니다
 # (느린 Wi-Fi에서 첫 연결 시 실제로 발생 — 웹 페이지 열 때마다 재부팅되는 버그).
 CONN_TIMEOUT_SEC = 5.0
+SEND_BUFFER_SIZE = 1024
 
 
 # -----------------------------------------------------------------
@@ -60,15 +61,29 @@ def _send_head(conn, status, ctype, extra=""):
 
 
 def send_stream(conn, chunks, status="200 OK", ctype="text/html; charset=utf-8"):
-    """제너레이터가 내놓는 조각을 받는 즉시 흘려보냅니다.
+    """제너레이터가 내놓는 조각을 모아서 흘려보냅니다.
     Content-Length를 쓰지 않는 대신 Connection: close로 끝을 알립니다
-    (길이를 알려면 페이지 전체를 메모리에 만들어야 하므로)."""
+    (길이를 알려면 페이지 전체를 메모리에 만들어야 하므로).
+
+    web_ui의 페이지 하나가 짧은 조각을 40~50번 yield하는데, 조각마다
+    바로 sendall()하면 그만큼 TCP round-trip이 생겨 느린 Wi-Fi에서
+    페이지 하나 여는 데 체감상 느려집니다. SEND_BUFFER_SIZE만큼 모아서
+    한 번에 보내면 메모리 사용량(버퍼 크기로 상한)은 그대로 낮게
+    유지하면서 전송 횟수를 크게 줄일 수 있습니다.
+    """
     _send_head(conn, status, ctype)
+    buf = bytearray()
     for c in chunks:
         if isinstance(c, str):
             c = c.encode('utf-8')
-        conn.sendall(c)
-        watchdog.feed()  # 느린 Wi-Fi에서 전송이 길어질 수 있음
+        buf += c
+        if len(buf) >= SEND_BUFFER_SIZE:
+            conn.sendall(buf)
+            watchdog.feed()  # 느린 Wi-Fi에서 전송이 길어질 수 있음
+            buf = bytearray()
+    if buf:
+        conn.sendall(buf)
+        watchdog.feed()
 
 
 def send_body(conn, body, status="200 OK", ctype="text/plain; charset=utf-8"):
