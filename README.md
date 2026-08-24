@@ -26,7 +26,7 @@ MicroPython 힙은 조각화되면 **여유 메모리가 충분해도 큰 연속
 - `watchdog.py` — 하드웨어 워치독(8초). 원인 불명의 먹통에서 자동 복구합니다.
 - `cpu_config.py` — CPU 클럭(오버클럭) 선택 저장/불러오기. `/power`에서 고른 값을 재부팅 후 적용합니다.
 - `lcd_driver.py` — I2C 1602 LCD 드라이버 (백라이트 제어 포함).
-- `wifi_manager.py` — Wi-Fi 연결(3회 재시도)/AP 모드/설정 저장/NTP 시각 동기화.
+- `wifi_manager.py` — 여러 Wi-Fi 저장(휴대폰처럼) 후 스캔해서 신호 강한 순으로 접속/AP 모드/NTP 시각 동기화.
 - `file_editor.py` — 웹 에디터의 저장/백업/되돌리기/목록 로직.
 - `ota.py` — GitHub `manifest.json` 기반 **수동** 업데이트.
 - `app_manager.py` — 어떤 `app_*.py`를 활성화할지 관리.
@@ -131,7 +131,7 @@ MicroPython 힙은 조각화되면 **여유 메모리가 충분해도 큰 연속
 1. `boot.py`가 `debug.log`를 보존하고 `import main`을 시도합니다 (실패 시 코어 모듈 일괄 롤백).
 2. `main.py`가 LCD를 초기화하고 활성 앱을 예외 격리해서 로드합니다.
 3. 주기 작업(클라우드 동기화, OTA 요청 확인)을 등록하고 core1 워커를 띄웁니다.
-4. `wifi_config.json`으로 접속을 시도합니다(3회 재시도). 실패하면 `Pico-Dust-Setup` 핫스팟을 엽니다. AP 모드에서도 3분마다 저장된 Wi-Fi로 백그라운드 재접속을 시도합니다.
+4. `wifi_config.json`에 저장된 여러 Wi-Fi 중 지금 스캔에 잡히는 것을 신호가 강한 순으로 골라 접속을 시도합니다(각 2회 재시도). 실패하면 `Pico-Dust-Setup` 핫스팟을 엽니다. AP 모드에서도 3분마다 저장된 Wi-Fi로 백그라운드 재접속을 시도합니다.
 5. 웹서버를 열고 **워치독을 켭니다**.
 6. 메인 루프가 요청 처리·측정·LCD 갱신·하트비트를 돌립니다.
 

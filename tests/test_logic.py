@@ -3,6 +3,7 @@ import file_editor
 import ota
 import httpd
 import cpu_config
+import wifi_manager
 
 
 # -----------------------------------------------------------------
@@ -122,6 +123,7 @@ def test_routes_cover_expected_paths():
     expected = {
         ("GET", "/"), ("GET", "/data"), ("GET", "/logs"), ("GET", "/logs.txt"),
         ("GET", "/edit"), ("GET", "/revert"), ("GET", "/save"),
+        ("GET", "/wifi/forget"),
         ("GET", "/apps"), ("GET", "/apps/set"), ("GET", "/ota/check"),
         ("GET", "/power"), ("GET", "/power/reboot"), ("GET", "/power/sleep"),
         ("GET", "/power/wake"), ("GET", "/power/freq"), ("GET", "/power/halt"),
@@ -179,3 +181,59 @@ def test_nested_routes_are_distinct_entries():
 def test_all_route_handlers_callable():
     for key, fn in httpd.ROUTES.items():
         assert callable(fn), key
+
+
+# -----------------------------------------------------------------
+# wifi_manager — 여러 Wi-Fi 저장/불러오기, 스캔 결과와 대조해 후보 고르기
+# -----------------------------------------------------------------
+def test_wifi_networks_empty_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert wifi_manager.load_wifi_networks() == []
+
+
+def test_wifi_networks_roundtrip_and_upsert(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    wifi_manager.save_wifi_network("A", "pw-a")
+    wifi_manager.save_wifi_network("B", "pw-b")
+    assert {n["ssid"] for n in wifi_manager.load_wifi_networks()} == {"A", "B"}
+
+    # 같은 SSID를 다시 저장하면 목록에 하나만 남고 비밀번호만 갱신됩니다.
+    wifi_manager.save_wifi_network("A", "new-pw")
+    networks = wifi_manager.load_wifi_networks()
+    assert len(networks) == 2
+    assert {n["ssid"]: n["password"] for n in networks}["A"] == "new-pw"
+
+
+def test_wifi_networks_remove(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    wifi_manager.save_wifi_network("A", "pw-a")
+    wifi_manager.save_wifi_network("B", "pw-b")
+    wifi_manager.remove_wifi_network("A")
+    assert [n["ssid"] for n in wifi_manager.load_wifi_networks()] == ["B"]
+
+
+def test_wifi_networks_migrates_old_single_network_format(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(wifi_manager.CONFIG_FILE, "w") as f:
+        f.write('{"ssid": "Old", "password": "legacy"}')
+    assert wifi_manager.load_wifi_networks() == [{"ssid": "Old", "password": "legacy"}]
+
+
+def test_pick_candidates_only_saved_ssids_in_scan():
+    networks = [{"ssid": "A", "password": "pw"}, {"ssid": "C", "password": "pw"}]
+    scan = [(b"A", b"", 1, -60, 0, 0), (b"B", b"", 1, -30, 0, 0)]
+    # C는 저장돼 있지만 스캔에 안 잡히니 후보에서 빠지고, B는 스캔엔
+    # 잡히지만 저장돼 있지 않으니 역시 빠집니다.
+    assert wifi_manager._pick_candidates(networks, scan) == [("A", "pw")]
+
+
+def test_pick_candidates_sorted_by_signal_strength():
+    networks = [{"ssid": "Weak", "password": "1"}, {"ssid": "Strong", "password": "2"}]
+    scan = [(b"Weak", b"", 1, -80, 0, 0), (b"Strong", b"", 1, -40, 0, 0)]
+    assert wifi_manager._pick_candidates(networks, scan) == [
+        ("Strong", "2"), ("Weak", "1"),
+    ]
+
+
+def test_pick_candidates_empty_when_nothing_matches():
+    assert wifi_manager._pick_candidates([{"ssid": "A", "password": ""}], []) == []

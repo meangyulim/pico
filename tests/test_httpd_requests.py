@@ -145,6 +145,32 @@ def test_apps_page():
     assert "앱 전환" in get("/apps")[0].body()
 
 
+def test_save_wifi_adds_network_and_triggers_reconnect(tmp_path, monkeypatch):
+    import wifi_manager
+    monkeypatch.chdir(tmp_path)
+    conn, state = get("/save?ssid=MyWifi&password=secret")
+    assert "200 OK" in conn.status()
+    assert state.pending_action == "reconnect"
+    assert {n["ssid"] for n in wifi_manager.load_wifi_networks()} == {"MyWifi"}
+
+
+def test_save_wifi_keeps_previously_saved_networks(tmp_path, monkeypatch):
+    import wifi_manager
+    monkeypatch.chdir(tmp_path)
+    wifi_manager.save_wifi_network("Already", "pw")
+    get("/save?ssid=New&password=pw2")
+    assert {n["ssid"] for n in wifi_manager.load_wifi_networks()} == {"Already", "New"}
+
+
+def test_wifi_forget_removes_saved_network(tmp_path, monkeypatch):
+    import wifi_manager
+    monkeypatch.chdir(tmp_path)
+    wifi_manager.save_wifi_network("Bye", "pw")
+    conn, _ = get("/wifi/forget?ssid=Bye")
+    assert "303" in conn.status()
+    assert wifi_manager.load_wifi_networks() == []
+
+
 def test_power_page():
     body = get("/power")[0].body()
     assert "전원 관리" in body and "/power/halt" in body
