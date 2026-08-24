@@ -8,6 +8,7 @@ import web_ui
 
 DASH = {
     "mode": "ONLINE_STA", "ip": "192.168.0.71", "wifis": ["LIM_", "iptime"],
+    "saved_wifis": ["LIM_", "iptime_5G"],
     "app_err": None, "value": 12.0, "status_eng": "IDLE", "status_kor": "대기",
     "color": "#64748b", "cloud": "대기 모드", "mute": True, "thresh": 0.0,
     "ota": "8초 전 - 변경 없음", "active_app": "app_idle",
@@ -93,6 +94,26 @@ def test_dashboard_lists_wifis_and_links():
         assert w in html
     for href in ("/ota/check", "/apps", "/edit", "/logs", "/power"):
         assert 'href="' + href + '"' in html
+
+
+def test_dashboard_lists_saved_wifis_with_forget_link():
+    html = render(web_ui.dashboard(DASH))
+    for ssid in DASH["saved_wifis"]:
+        assert "/wifi/forget?ssid=" + ssid in html
+
+
+def test_dashboard_saved_wifis_optional():
+    # 기존 호출자가 saved_wifis 없이 dict를 넘겨도 죽지 않아야 합니다.
+    d = {k: v for k, v in DASH.items() if k != "saved_wifis"}
+    html = render(web_ui.dashboard(d))
+    assert "<!DOCTYPE html>" in html
+
+
+def test_dashboard_saved_wifi_name_escaped():
+    d = dict(DASH, saved_wifis=["<script>x</script>"])
+    html = render(web_ui.dashboard(d))
+    assert "<script>x</script>" not in html
+    assert "&lt;script&gt;" in html
 
 
 def test_app_list_marks_active_and_links_others():

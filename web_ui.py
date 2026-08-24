@@ -116,8 +116,8 @@ DASH_CSS = (
 
 
 def dashboard(d):
-    """d: mode/ip/wifis/app_err/value/status_eng/status_kor/color/cloud/
-    mute/thresh/ota/active_app/last_update 를 담은 dict."""
+    """d: mode/ip/wifis/saved_wifis/app_err/value/status_eng/status_kor/color/
+    cloud/mute/thresh/ota/active_app/last_update 를 담은 dict."""
     offline = (d["mode"] == "OFFLINE_AP")
     yield from _head("Pico 대시보드", DASH_CSS)
 
@@ -156,8 +156,18 @@ def dashboard(d):
     yield '• IP: <b>' + esc(str(d["ip"])) + '</b></div></div>'
 
     yield '<details><summary>📶 Wi-Fi 연결 설정</summary>'
+    saved = d.get("saved_wifis") or []
+    if saved:
+        yield ('<div class="note" style="margin-top:12px">저장된 Wi-Fi — 이 중 신호가 '
+               '잡히는 곳에 자동으로 연결됩니다 (휴대폰처럼 여러 개 저장 가능).</div>')
+        for ssid in saved:
+            yield '<div class="row" style="display:flex;justify-content:space-between;align-items:center">'
+            yield '<span>📶 ' + esc(ssid) + '</span>'
+            yield ('<a href="/wifi/forget?ssid=' + esc(ssid) + '" style="color:#fca5a5;'
+                   'font-size:12px" onclick="return confirm(\'' + esc(ssid) +
+                   '을(를) 잊어버릴까요?\')">삭제</a></div>')
     yield '<form action="/save" method="GET" style="margin-top:12px">'
-    yield '<label>주변 Wi-Fi</label><select onchange="document.getElementById(\'s\').value=this.value">'
+    yield '<label>주변 Wi-Fi 추가</label><select onchange="document.getElementById(\'s\').value=this.value">'
     yield '<option value="">-- 검색된 목록 --</option>'
     for w in d["wifis"]:
         yield '<option value="' + esc(w) + '">' + esc(w) + '</option>'

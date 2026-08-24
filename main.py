@@ -21,7 +21,7 @@ import httpd
 from bg_thread import register_periodic_task, start_background_worker
 from lcd_driver import I2cLcd
 from wifi_manager import (
-    load_wifi_config, scan_nearby_wifis, connect_sta_wifi, start_ap_mode,
+    load_wifi_networks, scan_nearby_wifis, connect_sta_wifi, start_ap_mode,
     AP_RETRY_INTERVAL_MS,
 )
 from app_manager import load_active_app
@@ -117,11 +117,8 @@ def init_lcd():
 
 
 def connect_network(lcd, state):
-    cfg = load_wifi_config()
-    connected, ip = False, None
-    if cfg and cfg.get("ssid"):
-        connected, ip = connect_sta_wifi(cfg["ssid"], cfg.get("password", ""),
-                                         lcd_ref=lcd)
+    networks = load_wifi_networks()
+    connected, ip = connect_sta_wifi(networks, lcd_ref=lcd) if networks else (False, None)
     if connected:
         state.mode, state.current_ip = "ONLINE_STA", ip
     else:
@@ -259,8 +256,7 @@ def serve(lcd, state):
             if state.mode == "OFFLINE_AP" and \
                     utime.ticks_diff(now, t_retry) >= AP_RETRY_INTERVAL_MS:
                 t_retry = now
-                cfg = load_wifi_config()
-                if cfg and cfg.get("ssid"):
+                if load_wifi_networks():
                     print("🔁 저장된 Wi-Fi 재접속 시도...")
                     server.close()
                     return

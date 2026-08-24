@@ -29,7 +29,7 @@ from app_manager import (
     list_available_apps, get_active_app_name, set_active_app_name,
 )
 from ota import get_ota_status_text, get_last_update_text, request_manual_check
-from wifi_manager import save_wifi_config
+from wifi_manager import save_wifi_network, load_wifi_networks, remove_wifi_network
 from console_log import log_buffer, log_error
 
 try:
@@ -153,6 +153,7 @@ def _r_root(conn, state, params):
         "mode": state.mode,
         "ip": state.current_ip,
         "wifis": state.wifi_list,
+        "saved_wifis": [n["ssid"] for n in load_wifi_networks()],
         "app_err": state.app_err,
         "value": state.value,
         "status_eng": state.status_eng,
@@ -242,10 +243,20 @@ def _r_save_wifi(conn, state, params):
     if not ssid:
         redirect(conn, "/")
         return
-    save_wifi_config(ssid, params.get('password', '').strip())
+    save_wifi_network(ssid, params.get('password', '').strip())
     _msg(conn, "Wi-Fi 저장", "✅ Wi-Fi 저장 완료",
-         "[" + esc(ssid) + "] 연결을 시작합니다.", "#22c55e")
+         "[" + esc(ssid) + "] 이(가) 저장한 목록에 추가됐습니다. 지금 이 자리에서 "
+         "연결을 시작합니다. 다음부터는 저장해둔 곳 중 신호가 잡히는 곳에 "
+         "자동으로 연결됩니다.", "#22c55e")
     state.pending_action = "reconnect"
+
+
+def _r_wifi_forget(conn, state, params):
+    ssid = params.get('ssid', '').strip()
+    if ssid:
+        remove_wifi_network(ssid)
+        print("🗑️ 저장된 Wi-Fi [" + ssid + "] 삭제")
+    redirect(conn, "/")
 
 
 def _r_apps(conn, state, params):
@@ -378,6 +389,7 @@ ROUTES = {
     ("GET", "/edit"): _r_edit,
     ("GET", "/revert"): _r_revert,
     ("GET", "/save"): _r_save_wifi,
+    ("GET", "/wifi/forget"): _r_wifi_forget,
     ("GET", "/apps"): _r_apps,
     ("GET", "/apps/set"): _r_apps_set,
     ("GET", "/ota/check"): _r_ota_check,
