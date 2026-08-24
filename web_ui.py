@@ -295,7 +295,7 @@ def app_list(apps, active):
 # -----------------------------------------------------------------
 # 전원 관리 (/power)
 # -----------------------------------------------------------------
-def power_page(power_mode, uptime_str, cpu_mhz, wdt_active):
+def power_page(power_mode, uptime_str, cpu_mhz, wdt_active, freq_options, current_freq):
     sleeping = (power_mode == "SLEEP")
     yield from _head("Pico 전원 관리")
     yield from _hdr("⚡ 전원 관리")
@@ -305,6 +305,18 @@ def power_page(power_mode, uptime_str, cpu_mhz, wdt_active):
     yield '• CPU: <b>' + esc(str(cpu_mhz)) + ' MHz</b><br>'
     yield '• 워치독: <b>' + ("켜짐 (먹통 시 자동 재부팅)" if wdt_active else "꺼짐") + '</b>'
     yield '</div>'
+
+    yield '<details><summary>🚀 CPU 클럭 (오버클럭)</summary>'
+    yield ('<div class="note" style="margin-top:8px">전압은 건드리지 않는 선의 값들입니다. '
+           '바꾸면 재부팅 후 적용됩니다. 문제가 보이면 150MHz(기본)로 되돌리세요.</div>')
+    yield ('<form action="/power/freq" method="GET" style="margin-top:4px" '
+           'onsubmit="return confirm(\'클럭을 바꾸고 재부팅할까요?\')">')
+    yield '<label>클럭 선택</label><select name="mhz">'
+    for f in freq_options:
+        selected = ' selected' if f == current_freq else ''
+        label = str(f) + 'MHz' + (' (기본)' if f == 150 else '')
+        yield '<option value="' + str(f) + '"' + selected + '>' + label + '</option>'
+    yield '</select><button type="submit" class="btn">적용 및 재부팅</button></form></details>'
 
     yield ('<a href="/power/reboot" class="row" style="border-color:#38bdf8" '
            'onclick="return confirm(\'지금 다시 시작할까요?\')">'

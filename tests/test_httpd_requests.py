@@ -148,6 +148,26 @@ def test_apps_page():
 def test_power_page():
     body = get("/power")[0].body()
     assert "전원 관리" in body and "/power/halt" in body
+    assert "/power/freq" in body
+
+
+def test_power_freq_valid_value_saves_and_reboots(tmp_path, monkeypatch):
+    import cpu_config
+    monkeypatch.chdir(tmp_path)
+    conn, state = get("/power/freq?mhz=250")
+    assert "200 OK" in conn.status()
+    assert state.pending_action == "reboot"
+    assert cpu_config.load_freq_mhz() == 250
+
+
+def test_power_freq_invalid_value_redirects_without_change(tmp_path, monkeypatch):
+    import cpu_config
+    monkeypatch.chdir(tmp_path)
+    cpu_config.save_freq_mhz(150)
+    conn, state = get("/power/freq?mhz=9999")
+    assert "303" in conn.status()
+    assert state.pending_action is None
+    assert cpu_config.load_freq_mhz() == 150
 
 
 def test_ota_check_redirects_and_sets_flag():

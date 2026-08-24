@@ -25,6 +25,7 @@ TRACKED_FILES = [
     "app_manager.py",
     "netutil.py",
     "watchdog.py",
+    "cpu_config.py",
     "app_reaction_game.py",
     "app_dust_monitor.py",
     "app_idle.py",
