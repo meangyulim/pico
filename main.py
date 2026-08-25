@@ -157,7 +157,12 @@ def measure_and_update_lcd(lcd, state, toggle):
         lcd.putstr("App Error       " if state.app_err
                    else "Val:{:6.0f}     ".format(state.value))
         lcd.move_to(0, 1)
-        if toggle % 2 == 0:
+        # 반응속도 게임처럼 실시간 상태를 계속 봐야 하는 앱은 IP와 번갈아
+        # 보여주면 정작 중요한 순간(예: "GO" 신호)을 놓칠 수 있습니다.
+        # 그런 앱은 SHOW_IP_ON_LCD = False로 IP 토글을 끄고 상태만 고정
+        # 표시합니다 (기본값 True — 미세먼지 앱 등 기존 동작 유지).
+        show_ip = getattr(app, "SHOW_IP_ON_LCD", True) if app else True
+        if show_ip and toggle % 2 == 0:
             ip = str(state.current_ip) if state.current_ip else "No IP"
             tag = "IP:" if state.mode == "ONLINE_STA" else "AP:"
             disp = (tag + ip) if len(ip) <= 13 else ip
