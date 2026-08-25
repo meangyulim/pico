@@ -31,10 +31,7 @@ CLOUD_SYNC_INTERVAL_MS = 60000
 alert_threshold = 0                # 미사용
 is_muted = True                    # 버저가 없으므로 항상 음소거
 cloud_sync_status = "게임 모드 (클라우드 동기화 없음)"
-# LCD 둘째 줄을 IP와 번갈아 보여주지 않고 게임 상태(WAIT/GO/FOUL/RESULT)
-# 고정으로 보여줍니다 — 안 그러면 "GO" 신호가 뜨는 순간을 IP 표시에
-# 가려서 놓칠 수 있습니다.
-SHOW_IP_ON_LCD = False
+LCD_VALUE_LABEL = "Rct"            # LCD 1번째 줄 "Val:" 라벨을 반응속도(ms)에 맞게 표시
 
 led = machine.Pin(LED_PIN, machine.Pin.OUT)
 led.value(0)
