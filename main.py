@@ -153,21 +153,24 @@ def measure_and_update_lcd(lcd, state, toggle):
             log_error("센서 측정", e)
 
     if lcd:
+        # 1번째 줄: IP와 측정값을 번갈아 보여줍니다 (IP를 아예 안 보여주면
+        # 불편하다는 피드백 반영). 2번째 줄은 앱 상태를 항상 고정 표시합니다
+        # — 반응속도 게임처럼 "GO" 같은 실시간 신호를 IP 표시에 가려
+        # 놓치면 안 되는 앱이 있어서, 상태 줄만큼은 절대 안 가립니다.
         lcd.move_to(0, 0)
-        lcd.putstr("App Error       " if state.app_err
-                   else "Val:{:6.0f}     ".format(state.value))
-        lcd.move_to(0, 1)
-        # 반응속도 게임처럼 실시간 상태를 계속 봐야 하는 앱은 IP와 번갈아
-        # 보여주면 정작 중요한 순간(예: "GO" 신호)을 놓칠 수 있습니다.
-        # 그런 앱은 SHOW_IP_ON_LCD = False로 IP 토글을 끄고 상태만 고정
-        # 표시합니다 (기본값 True — 미세먼지 앱 등 기존 동작 유지).
-        show_ip = getattr(app, "SHOW_IP_ON_LCD", True) if app else True
-        if show_ip and toggle % 2 == 0:
+        if state.app_err:
+            lcd.putstr("App Error       ")
+        elif toggle % 2 == 0:
             ip = str(state.current_ip) if state.current_ip else "No IP"
             tag = "IP:" if state.mode == "ONLINE_STA" else "AP:"
             disp = (tag + ip) if len(ip) <= 13 else ip
             lcd.putstr("{:<16}".format(disp[:16]))
-        elif state.app_err:
+        else:
+            label = getattr(app, "LCD_VALUE_LABEL", "Val") if app else "Val"
+            lcd.putstr("{:<16}".format("{}:{:.0f}".format(label, state.value))[:16])
+
+        lcd.move_to(0, 1)
+        if state.app_err:
             lcd.putstr("Check /edit Web ")
         else:
             lcd.putstr("{:<16}".format(state.status_eng[:16]))
